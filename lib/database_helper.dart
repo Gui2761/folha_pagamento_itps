@@ -10,7 +10,7 @@ class DatabaseHelper {
 
   Future<Database> get database async {
     if (_database != null) return _database!;
-    _database = await _initDB('folha_itps_v7_vinculo.db'); // Versão 7
+    _database = await _initDB('folha_itps_v9_completo.db'); // Versão 9
     return _database!;
   }
 
@@ -33,13 +33,14 @@ class DatabaseHelper {
       )
     ''');
 
-    // 2. Funcionários (Com VÍNCULO de volta)
+    // 2. Funcionários (COM NOVOS CAMPOS DE DESCONTOS)
     await db.execute('''
       CREATE TABLE funcionarios (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT NOT NULL,
         cpf TEXT NOT NULL,
-        vinculo TEXT NOT NULL, -- CAMPO REINTRODUZIDO
+        rg TEXT,             -- NOVO: RG
+        vinculo TEXT NOT NULL,
         banco TEXT,
         agencia TEXT,
         conta TEXT,
@@ -47,6 +48,8 @@ class DatabaseHelper {
         locacao TEXT,
         percentual REAL NOT NULL,
         valor_sipes REAL DEFAULT 0.0,
+        pensao REAL DEFAULT 0.0,  -- NOVO: Pensão Alimentícia
+        outros REAL DEFAULT 0.0,  -- NOVO: Outros Descontos
         tem_inss INTEGER NOT NULL,
         tem_irrf INTEGER NOT NULL
       )
@@ -57,7 +60,7 @@ class DatabaseHelper {
     await db.execute('CREATE TABLE tabela_inss (id INTEGER PRIMARY KEY AUTOINCREMENT, limite REAL NOT NULL, aliquota REAL NOT NULL)');
     await db.execute('CREATE TABLE tabela_irrf (id INTEGER PRIMARY KEY AUTOINCREMENT, limite REAL NOT NULL, aliquota REAL NOT NULL, deducao REAL NOT NULL)');
 
-    // === INSERIR CARGOS REAIS ===
+    // === INSERIR DADOS INICIAIS ===
     final List<Map<String, dynamic>> cargosReais = [
       {'nome': 'Engenheiro Químico - Presidência', 'p': 2.50},
       {'nome': 'Diretor Administrativo e Financeiro - Diretoria Adm/Fin', 'p': 2.30},
@@ -154,6 +157,7 @@ class DatabaseHelper {
     batch.insert('configs', {'chave': 'ir_redutor_a', 'valor': 978.62});
     batch.insert('configs', {'chave': 'ir_redutor_b', 'valor': 0.133145});
     batch.insert('configs', {'chave': 'ir_limite_redutor', 'valor': 7350.00});
+    batch.insert('configs', {'chave': 'aliquota_patronal', 'valor': 9.02});
 
     batch.insert('tabela_inss', {'limite': 1621.00, 'aliquota': 7.5});
     batch.insert('tabela_inss', {'limite': 2902.84, 'aliquota': 9.0});
