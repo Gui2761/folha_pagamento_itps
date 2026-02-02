@@ -1,10 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
+import 'package:excel/excel.dart' hide Border; 
+import 'package:file_selector/file_selector.dart';
+import 'package:path_provider/path_provider.dart';
 import 'database_helper.dart';
 import 'calculadora_taxas.dart';
 
@@ -28,6 +29,12 @@ class MyApp extends StatelessWidget {
           seedColor: const Color(0xFF0D47A1),
           secondary: const Color(0xFF00695C),
           surface: const Color(0xFFF5F7FA),
+        ),
+        scrollbarTheme: ScrollbarThemeData(
+          thumbColor: WidgetStateProperty.all(const Color(0xFF0D47A1).withValues(alpha: 0.6)),
+          thickness: WidgetStateProperty.all(10), 
+          radius: const Radius.circular(10),
+          thumbVisibility: WidgetStateProperty.all(true), 
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
@@ -57,6 +64,10 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _cargos = [];
   bool _isLoading = true;
   int? _editingId;
+
+  // Controllers de Scroll
+  final ScrollController _horizontalScroll = ScrollController();
+  final ScrollController _verticalScroll = ScrollController();
 
   final _formKey = GlobalKey<FormState>();
   final _nomeCtrl = TextEditingController();
@@ -204,33 +215,43 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _mostrarSnack(String msg, Color cor) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: cor));
   }
 
-  // === FUNÇÃO DE IMPRESSÃO (PDF) ===
-  Future<void> _imprimirRelatorio() async {
+  // === GERADOR DE EXCEL ===
+  Future<void> _exportarExcel() async {
     if (_funcionarios.isEmpty) {
-      _mostrarSnack("Não há funcionários para imprimir.", Colors.red);
+      _mostrarSnack("Não há dados para exportar.", Colors.red);
       return;
     }
 
-    final pdf = pw.Document();
-    final fontBold = await PdfGoogleFonts.openSansBold();
-    final fontRegular = await PdfGoogleFonts.openSansRegular();
+    var excel = Excel.createExcel();
+    Sheet sheetObject = excel['Folha ITPS'];
+    excel.delete('Sheet1'); 
 
-    // Calcula totais para o PDF
+    CellStyle headerStyle = CellStyle(
+      backgroundColorHex: ExcelColor.blue,
+      fontColorHex: ExcelColor.white,
+      bold: true,
+      horizontalAlign: HorizontalAlign.Center,
+    );
+
+    List<String> headers = [
+      'Nome', 'Vínculo', 'CPF', 'RG', 'Banco', 'Agência', 'Conta', 
+      'Cargo', 'Locação', 'SIPES', '%', 'Bruto', 'INSS', 'IRRF', 
+      'Pensão', 'Outros', 'Líquido'
+    ];
+
+    sheetObject.appendRow(headers.map((e) => TextCellValue(e)).toList());
+    
+    for (int i = 0; i < headers.length; i++) {
+      var cell = sheetObject.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+      cell.cellStyle = headerStyle;
+    }
+
     double totalBruto = 0;
     double totalLiquido = 0;
-    double totalPatronal = 0;
-    double aliquotaPatronal = _configData!['geral']['aliquota_patronal'] ?? 0.0;
-
-    // Prepara dados da tabela
-    final List<List<String>> dadosTabela = [];
-    
-    // Cabeçalho da Tabela
-    dadosTabela.add([
-      'Nome', 'Vínculo', 'CPF', 'Banco/Ag/CC', 'SIPES', 'Bruto', 'INSS', 'IRRF', 'Outros', 'Líquido'
-    ]);
 
     for (var f in _funcionarios) {
       final calc = CalculadoraTaxas.calcularFolha(
@@ -246,89 +267,47 @@ class _HomeScreenState extends State<HomeScreen> {
       totalBruto += calc['bruto'];
       totalLiquido += calc['liquido'];
 
-      // Formata dados bancários em uma string curta
-      String dadosBancarios = "${f['banco'] ?? ''}/${f['agencia'] ?? ''}/${f['conta'] ?? ''}";
-
-      dadosTabela.add([
-        f['nome'],
-        f['vinculo'] ?? '',
-        f['cpf'] ?? '',
-        dadosBancarios,
-        _money.format(f['valor_sipes']),
-        _money.format(calc['bruto']),
-        _money.format(calc['inss']),
-        _money.format(calc['irrf']),
-        _money.format((f['pensao'] ?? 0) + (f['outros'] ?? 0)),
-        _money.format(calc['liquido']),
+      sheetObject.appendRow([
+        TextCellValue(f['nome']),
+        TextCellValue(f['vinculo'] ?? ''),
+        TextCellValue(f['cpf'] ?? ''),
+        TextCellValue(f['rg'] ?? ''),
+        TextCellValue(f['banco'] ?? ''),
+        TextCellValue(f['agencia'] ?? ''),
+        TextCellValue(f['conta'] ?? ''),
+        TextCellValue(f['cargo_nome'] ?? ''),
+        TextCellValue(f['locacao'] ?? ''),
+        DoubleCellValue(f['valor_sipes']),
+        DoubleCellValue(f['percentual']),
+        DoubleCellValue(calc['bruto']),
+        DoubleCellValue(calc['inss']),
+        DoubleCellValue(calc['irrf']),
+        DoubleCellValue(f['pensao'] ?? 0.0),
+        DoubleCellValue(f['outros'] ?? 0.0),
+        DoubleCellValue(calc['liquido']),
       ]);
     }
 
-    totalPatronal = totalBruto * (aliquotaPatronal / 100);
+    sheetObject.appendRow([
+      TextCellValue('TOTAIS'),
+      TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''),
+      TextCellValue(''), TextCellValue(''),
+      DoubleCellValue(totalBruto),
+      TextCellValue(''), TextCellValue(''), TextCellValue(''), TextCellValue(''),
+      DoubleCellValue(totalLiquido),
+    ]);
 
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape,
-        margin: const pw.EdgeInsets.all(20),
-        build: (pw.Context context) {
-          return [
-            pw.Header(
-              level: 0,
-              child: pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text('Relatório Folha de Pagamento - ITPS', style: pw.TextStyle(font: fontBold, fontSize: 18)),
-                  pw.Text(DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now()), style: pw.TextStyle(font: fontRegular, fontSize: 12)),
-                ]
-              )
-            ),
-            pw.SizedBox(height: 10),
-            
-            // Tabela
-            pw.Table.fromTextArray(
-              headers: dadosTabela.first,
-              data: dadosTabela.sublist(1),
-              headerStyle: pw.TextStyle(font: fontBold, fontSize: 9, color: PdfColors.white),
-              headerDecoration: const pw.BoxDecoration(color: PdfColors.blue800),
-              cellStyle: pw.TextStyle(font: fontRegular, fontSize: 8),
-              cellAlignment: pw.Alignment.centerLeft,
-              cellAlignments: {
-                4: pw.Alignment.centerRight, // SIPES
-                5: pw.Alignment.centerRight, // Bruto
-                6: pw.Alignment.centerRight, // INSS
-                7: pw.Alignment.centerRight, // IRRF
-                8: pw.Alignment.centerRight, // Outros
-                9: pw.Alignment.centerRight, // Liq
-              },
-              border: pw.TableBorder.all(color: PdfColors.grey300),
-              rowDecoration: const pw.BoxDecoration(border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300))),
-            ),
-
-            pw.SizedBox(height: 20),
-            pw.Divider(),
-            
-            // Resumo Final
-            pw.Row(
-              mainAxisAlignment: pw.MainAxisAlignment.end,
-              children: [
-                pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.end,
-                  children: [
-                    pw.Text("Total Bruto: ${_money.format(totalBruto)}", style: pw.TextStyle(font: fontBold)),
-                    pw.Text("Patronal + RAT: ${_money.format(totalPatronal)}", style: pw.TextStyle(font: fontRegular)),
-                    pw.Text("Total Retirada: ${_money.format(totalBruto + totalPatronal)}", style: pw.TextStyle(font: fontBold, fontSize: 14, color: PdfColors.green700)),
-                  ]
-                )
-              ]
-            )
-          ];
-        },
-      ),
-    );
-
-    // Abre a visualização de impressão
-    await Printing.layoutPdf(
-      onLayout: (PdfPageFormat format) async => pdf.save(),
-    );
+    final String fileName = "folha_itps_${DateFormat('dd-MM-yyyy').format(DateTime.now())}.xlsx";
+    final FileSaveLocation? result = await getSaveLocation(suggestedName: fileName);
+    
+    if (result != null) {
+      final List<int>? fileBytes = excel.save();
+      if (fileBytes != null) {
+        final File file = File(result.path);
+        await file.writeAsBytes(fileBytes);
+        if (mounted) _mostrarSnack("Arquivo Excel salvo com sucesso!", Colors.green);
+      }
+    }
   }
 
   @override
@@ -410,37 +389,44 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
         elevation: 2,
-        title: const Row(children: [Icon(Icons.table_chart, size: 28), SizedBox(width: 10), Text('Sistema Folha ITPS', style: TextStyle(fontWeight: FontWeight.bold))]),
+        // --- LOGO REMOVIDA, VOLTANDO AO ÍCONE PADRÃO ---
+        title: const Row(children: [
+          Icon(Icons.table_chart, size: 28), 
+          SizedBox(width: 10), 
+          Text('Sistema Folha ITPS', style: TextStyle(fontWeight: FontWeight.bold))
+        ]),
+        // -----------------------------------------------
         backgroundColor: const Color(0xFF0D47A1), 
         foregroundColor: Colors.white,
         actions: [
-          // BOTÃO DE IMPRIMIR
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: IconButton(
-              onPressed: _imprimirRelatorio,
-              icon: const Icon(Icons.print),
-              tooltip: "Imprimir Relatório",
+            child: FilledButton.icon(
+              onPressed: _exportarExcel,
+              icon: const Icon(Icons.file_download, size: 18),
+              label: const Text("Exportar Excel"),
+              style: FilledButton.styleFrom(backgroundColor: Colors.green[700], foregroundColor: Colors.white),
             ),
           ),
           Padding(
             padding: const EdgeInsets.all(8.0),
             child: FilledButton.icon(
               onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ConfigScreen(data: _configData!, onSave: _refreshTudo))),
-              icon: const Icon(Icons.settings),
-              label: const Text("Configurações"),
-              style: FilledButton.styleFrom(backgroundColor: Colors.white.withOpacity(0.2), foregroundColor: Colors.white),
+              icon: const Icon(Icons.settings, size: 18),
+              label: const Text("Config."),
+              style: FilledButton.styleFrom(backgroundColor: Colors.white.withValues(alpha: 0.2), foregroundColor: Colors.white),
             ),
           )
         ],
       ),
       body: Column(
         children: [
+          // DASHBOARD
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 5, offset: const Offset(0, 2))],
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 5, offset: const Offset(0, 2))],
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -453,10 +439,12 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
+          // CONTEUDO PRINCIPAL
           Expanded(
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch, 
               children: [
+                // ESQUERDA: FORM
                 Container(
                   width: 380,
                   padding: const EdgeInsets.all(16),
@@ -475,7 +463,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Text(_editingId != null ? "Editar Funcionário" : "Novo Cadastro", 
+                                  Text(_editingId != null ? "Editar" : "Novo Cadastro", 
                                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _editingId != null ? Colors.orange[800] : const Color(0xFF0D47A1))),
                                   if (_editingId != null) 
                                     IconButton(icon: const Icon(Icons.close), onPressed: _limparForm, tooltip: "Cancelar Edição")
@@ -601,6 +589,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 
+                // DIREITA: TABELA (Scrollbar Fixo Embaixo)
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.only(top: 16, right: 16, bottom: 16),
@@ -623,40 +612,64 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                           ),
+                          
+                          // MÁGICA: O Scrollbar Horizontal envolve tudo
                           Expanded(
-                            child: SingleChildScrollView(
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: DataTable(
-                                  headingRowColor: WidgetStateProperty.all(Colors.grey[100]),
-                                  dataRowColor: WidgetStateProperty.resolveWith<Color?>((Set<WidgetState> states) {
-                                    if (states.contains(WidgetState.selected)) return Theme.of(context).colorScheme.primary.withOpacity(0.08);
-                                    return null;
-                                  }),
-                                  columnSpacing: 24,
-                                  horizontalMargin: 20,
-                                  columns: const [
-                                    DataColumn(label: Text("NOME", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("CPF", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("RG", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("BANCO", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("AGÊNCIA", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("CONTA", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("CARGO / LOCAÇÃO", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("VÍNCULO", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("SIPES", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("%", style: TextStyle(fontWeight: FontWeight.bold))), 
-                                    DataColumn(label: Text("BRUTO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue))), 
-                                    DataColumn(label: Text("INSS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))), 
-                                    DataColumn(label: Text("IRRF", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))), 
-                                    DataColumn(label: Text("PENSÃO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))), 
-                                    DataColumn(label: Text("OUTROS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))), 
-                                    DataColumn(label: Text("LÍQUIDO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green))), 
-                                    DataColumn(label: Text("AÇÕES", style: TextStyle(fontWeight: FontWeight.bold))),
-                                  ],
-                                  rows: rows,
-                                ),
-                              ),
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                return Scrollbar(
+                                  controller: _horizontalScroll,
+                                  thumbVisibility: true,
+                                  trackVisibility: true,
+                                  child: SingleChildScrollView(
+                                    controller: _horizontalScroll,
+                                    scrollDirection: Axis.horizontal,
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        minHeight: constraints.maxHeight, 
+                                        minWidth: 1500, // Largura forçada para ativar scroll
+                                      ),
+                                      child: Scrollbar(
+                                        controller: _verticalScroll,
+                                        thumbVisibility: true,
+                                        child: SingleChildScrollView(
+                                          controller: _verticalScroll,
+                                          scrollDirection: Axis.vertical,
+                                          child: DataTable(
+                                            headingRowColor: WidgetStateProperty.all(Colors.grey[100]),
+                                            dataRowColor: WidgetStateProperty.resolveWith<Color?>((Set<WidgetState> states) {
+                                              if (states.contains(WidgetState.selected)) return Theme.of(context).colorScheme.primary.withValues(alpha: 0.08);
+                                              return null;
+                                            }),
+                                            columnSpacing: 24,
+                                            horizontalMargin: 20,
+                                            columns: const [
+                                              DataColumn(label: Text("NOME", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("CPF", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("RG", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("BANCO", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("AGÊNCIA", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("CONTA", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("CARGO / LOCAÇÃO", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("VÍNCULO", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("SIPES", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("%", style: TextStyle(fontWeight: FontWeight.bold))), 
+                                              DataColumn(label: Text("BRUTO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue))), 
+                                              DataColumn(label: Text("INSS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))), 
+                                              DataColumn(label: Text("IRRF", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))), 
+                                              DataColumn(label: Text("PENSÃO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))), 
+                                              DataColumn(label: Text("OUTROS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))), 
+                                              DataColumn(label: Text("LÍQUIDO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green))), 
+                                              DataColumn(label: Text("AÇÕES", style: TextStyle(fontWeight: FontWeight.bold))),
+                                            ],
+                                            rows: rows,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }
                             ),
                           ),
                         ],
@@ -678,15 +691,15 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3)),
-        boxShadow: [BoxShadow(color: color.withOpacity(0.1), blurRadius: 4, offset: const Offset(0, 2))]
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+        boxShadow: [BoxShadow(color: color.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2))]
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
             padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: color.withOpacity(0.1), shape: BoxShape.circle),
+            decoration: BoxDecoration(color: color.withValues(alpha: 0.1), shape: BoxShape.circle),
             child: Icon(icon, color: color, size: 24),
           ),
           const SizedBox(width: 15),
@@ -712,6 +725,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+// CLASSES DE FORMATAÇÃO (MÁSCARAS)
 class CurrencyInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
@@ -789,7 +803,7 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
     await DatabaseHelper.instance.updateConfigValor('aliquota_patronal', double.parse(_patronalCtrl.text));
     if (!mounted) return;
     widget.onSave();
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Configurações salvas!")));
+    if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Configurações salvas!")));
   }
 
   Future<void> _editarFaixaInss(Map<String, dynamic> item) async {
@@ -869,10 +883,7 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
     return Scaffold(
       appBar: AppBar(title: const Text("Configurações do Sistema"), bottom: TabBar(controller: _tabController, tabs: const [Tab(text: "Geral"), Tab(text: "Tabelas"), Tab(text: "Cargos")])),
       body: TabBarView(controller: _tabController, children: [
-          // GERAL
           ListView(padding: const EdgeInsets.all(20), children: [const Text("Valores Base", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)), const SizedBox(height: 10), TextField(controller: _baseCtrl, decoration: const InputDecoration(labelText: "Valor Base Convênio (R\$)", border: OutlineInputBorder())), const SizedBox(height: 10), TextField(controller: _tetoInssCtrl, decoration: const InputDecoration(labelText: "Teto Máximo INSS (R\$)", border: OutlineInputBorder())), const SizedBox(height: 10), TextField(controller: _patronalCtrl, decoration: const InputDecoration(labelText: "Alíquota Patronal/RAT (%)", border: OutlineInputBorder())), const SizedBox(height: 20), ElevatedButton(onPressed: _salvarGeral, child: const Text("SALVAR ALTERAÇÕES"))]),
-          
-          // TABELAS
           ListView(padding: const EdgeInsets.all(20), children: [
             const Text("Tabela INSS", style: TextStyle(fontWeight: FontWeight.bold)), 
             ..._tabelaInss.map((r) => ListTile(
@@ -888,8 +899,6 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
                 trailing: IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _editarFaixaIrrf(r))
             ))
           ]),
-          
-          // CARGOS
           Column(children: [Padding(padding: const EdgeInsets.all(10.0), child: ElevatedButton.icon(onPressed: _adicionarCargo, icon: const Icon(Icons.add), label: const Text("Adicionar Novo Cargo"))), Expanded(child: ListView.builder(itemCount: _cargosLocais.length, itemBuilder: (ctx, i) { final c = _cargosLocais[i]; return ListTile(title: Text(c['nome']), subtitle: Text("Percentual Padrão: ${c['percentual_padrao']}%"), trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _deletarCargo(c['id']))); }))])
       ]),
     );

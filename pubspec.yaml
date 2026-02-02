@@ -17,14 +17,30 @@ dependencies:
   # Gerenciamento de estado simples
   provider: ^6.0.5
   # Formatação de moeda (R$)
-  intl: ^0.18.1
-  pdf: ^3.10.4
-  printing: ^5.11.1
-  
+  intl: ^0.19.0
+  excel: ^4.0.2
+  file_selector: ^1.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
+  # CORRIGIDO AQUI (Faltava o numero final)
+  flutter_launcher_icons: ^0.13.1
+
+# Configuração dos Ícones
+flutter_launcher_icons:
+  android: false
+  ios: false
+  image_path: "assets/images/logo.png"
+  windows:
+    generate: true
+    image_path: "assets/images/logo.png"
+    icon_size: 48
 
 flutter:
   uses-material-design: true
+
+  # CORRIGIDA A INDENTAÇÃO (Espaços são vitais no YAML)
+  assets:
+    - assets/images/
