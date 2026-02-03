@@ -1,63 +1,89 @@
+import 'package:flutter/material.dart';
 import 'dart:math';
 
 class CalculadoraTaxas {
   
   static Map<String, dynamic> calcularFolha({
     required double percentual,
-    required double valorSipes, // Base de Cálculo do SIPES (Bruto - INSS de lá)
+    required double valorSipes, 
     required double pensao,
     required double outros,
     required bool temInss,
     required bool temIrrf,
     required Map<String, dynamic> configData,
   }) {
-    final Map<String, double> geral = configData['geral'];
-    final List<Map<String, dynamic>> tabelaInss = configData['inss'];
-    final List<Map<String, dynamic>> tabelaIrrf = configData['irrf'];
+    final Map<String, double> geral = Map<String, double>.from(configData['geral'] ?? {});
+    final List<Map<String, dynamic>> tabelaInss = List.from(configData['inss']);
+    final List<Map<String, dynamic>> tabelaIrrf = List.from(configData['irrf']);
 
+    // 1. Definição do Bruto (Base Convênio)
     double baseConvenio = geral['base_convenio'] ?? 210000.00;
-    double tetoInss = geral['teto_inss'] ?? 8475.55;
-    
-    // 1. Bruto do Convênio
     double valorBrutoConvenio = baseConvenio * (percentual / 100);
     
-    // 2. INSS (Calculado sobre o Convênio)
-    double inss = 0.0;
+    // Variáveis de Detalhe
+    double inssSobreTotal = 0.0;
+    double inssSobreSipes = 0.0;
+    double inssDevido = 0.0;
+
+    // 2. CÁLCULO DO INSS (CORREÇÃO: SOMA DAS BASES)
     if (temInss) {
-      inss = _calcularInssDinamico(valorBrutoConvenio, tabelaInss, tetoInss);
+      // Calcula o INSS como se fosse um salário único (Sipes + Convênio)
+      // Isso joga o funcionário para a faixa correta (ex: 12% ou 14%)
+      double baseTotal = valorSipes + valorBrutoConvenio;
+      inssSobreTotal = _calcularInssProgressivo(baseTotal, tabelaInss);
+      
+      // Calcula quanto ele JÁ PAGOU no Estado (Sipes)
+      inssSobreSipes = _calcularInssProgressivo(valorSipes, tabelaInss);
+      
+      // A diferença é o que ele deve pagar no Convênio
+      inssDevido = max(0, inssSobreTotal - inssSobreSipes);
     }
 
-    // 3. IRRF (Lógica de Soma de Bases / Marginal)
+    // 3. CÁLCULO DO IRRF
     double irrf = 0.0;
+    double irrfBrutoFinal = 0.0;
+    double irrfSipesFinal = 0.0;
+    double descontoSimplificado = geral['desconto_simplificado'] ?? 564.80; 
+
     if (temIrrf) {
-      // Base 1: O que ele ganha no Estado (SIPES)
-      // Assumimos que o valor digitado no campo SIPES já é a base tributável de lá
-      double baseSipes = valorSipes; 
+      // Soma para base de IRRF
+      double baseTotalIR = valorBrutoConvenio + valorSipes;
       
-      // Base 2: O que ele ganha no Convênio (menos o INSS daqui e a Pensão)
-      double baseConvenioLiquida = valorBrutoConvenio - inss - pensao;
-      if (baseConvenioLiquida < 0) baseConvenioLiquida = 0;
+      // A: IRRF Total (Considerando Sipes + Convenio)
+      // Opção 1: Deduções Legais (INSS Total + Pensão)
+      double baseLegalTotal = baseTotalIR - inssSobreTotal - pensao; 
+      double impostoLegalTotal = baseLegalTotal > 0 ? _calcularIrrf(baseLegalTotal, tabelaIrrf) : 0.0;
 
-      // Cálculo A: Imposto que ele pagaria somando TUDO
-      double baseTotal = baseSipes + baseConvenioLiquida;
-      double impostoTotal = _calcularImpostoPuro(baseTotal, tabelaIrrf);
+      // Opção 2: Desconto Simplificado
+      double baseSimplesTotal = baseTotalIR - descontoSimplificado;
+      double impostoSimplesTotal = baseSimplesTotal > 0 ? _calcularIrrf(baseSimplesTotal, tabelaIrrf) : 0.0;
 
-      // Cálculo B: Imposto que ele já paga só no SIPES
-      double impostoSipes = _calcularImpostoPuro(baseSipes, tabelaIrrf);
+      double irrfTotal = min(impostoLegalTotal, impostoSimplesTotal);
 
-      // O IRRF desta folha é a diferença (o acréscimo de imposto gerado pelo convênio)
-      irrf = impostoTotal - impostoSipes;
-      
-      if (irrf < 0) irrf = 0;
+      // B: IRRF Sipes (O que já seria retido lá)
+      double baseLegalSipes = valorSipes - inssSobreSipes;
+      double impostoLegalSipes = baseLegalSipes > 0 ? _calcularIrrf(baseLegalSipes, tabelaIrrf) : 0.0;
+
+      double baseSimplesSipes = valorSipes - descontoSimplificado;
+      double impostoSimplesSipes = baseSimplesSipes > 0 ? _calcularIrrf(baseSimplesSipes, tabelaIrrf) : 0.0;
+
+      irrfSipesFinal = min(impostoLegalSipes, impostoSimplesSipes);
+
+      // C: Diferença a pagar
+      irrf = max(0, irrfTotal - irrfSipesFinal);
+      irrfBrutoFinal = irrfTotal;
     }
 
-    // 4. Líquido
-    double liquido = valorBrutoConvenio - inss - irrf - pensao - outros;
+    double liquido = valorBrutoConvenio - inssDevido - irrf - pensao - outros;
 
     return {
       'bruto': valorBrutoConvenio,
-      'inss': inss,
+      'inss': inssDevido,
+      'inss_total': inssSobreTotal,
+      'inss_sipes': inssSobreSipes,
       'irrf': irrf,
+      'irrf_total': irrfBrutoFinal,
+      'irrf_sipes': irrfSipesFinal,
       'pensao': pensao,
       'outros': outros,
       'liquido': liquido,
@@ -65,35 +91,36 @@ class CalculadoraTaxas {
     };
   }
 
-  // Função auxiliar para calcular imposto sobre uma base qualquer
-  static double _calcularImpostoPuro(double base, List<Map<String, dynamic>> tabela) {
+  // --- FUNÇÕES AUXILIARES ---
+  static double _calcularInssProgressivo(double salario, List<Map<String, dynamic>> tabela) {
     double imposto = 0.0;
-    for (var faixa in tabela) {
-      if (base <= faixa['limite']) {
-        imposto = (base * (faixa['aliquota'] / 100)) - faixa['deducao'];
-        break;
-      }
-    }
-    return max(0, imposto);
-  }
-
-  static double _calcularInssDinamico(double salario, List<Map<String, dynamic>> tabela, double tetoMaximo) {
-    double desconto = 0.0;
-    double salarioCalculo = min(salario, tetoMaximo);
-    double faixaAnterior = 0.0;
-
+    tabela.sort((a, b) => (a['limite'] as num).compareTo(b['limite'] as num));
+    double limiteAnterior = 0.0;
     for (var faixa in tabela) {
       double limite = faixa['limite'];
-      double aliquota = faixa['aliquota'] / 100;
-
-      if (salarioCalculo > limite) {
-        desconto += (limite - faixaAnterior) * aliquota;
-        faixaAnterior = limite;
+      double aliquota = faixa['aliquota'];
+      if (salario > limite) {
+        imposto += (limite - limiteAnterior) * (aliquota / 100);
       } else {
-        desconto += (salarioCalculo - faixaAnterior) * aliquota;
-        break;
+        imposto += (salario - limiteAnterior) * (aliquota / 100);
+        return imposto;
+      }
+      limiteAnterior = limite;
+    }
+    return imposto; // Se passar do teto, retorna o acumulado
+  }
+
+  static double _calcularIrrf(double base, List<Map<String, dynamic>> tabela) {
+    tabela.sort((a, b) => (a['limite'] as num).compareTo(b['limite'] as num));
+    for (var faixa in tabela) {
+      if (base <= faixa['limite']) {
+        return max(0, (base * (faixa['aliquota'] / 100)) - faixa['deducao']);
       }
     }
-    return desconto;
+    if (tabela.isNotEmpty) {
+      var ultima = tabela.last;
+      return max(0, (base * (ultima['aliquota'] / 100)) - ultima['deducao']);
+    }
+    return 0.0;
   }
 }
