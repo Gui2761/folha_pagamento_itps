@@ -37,43 +37,44 @@ class CalculadoraTaxas {
       inssDevido = max(0, inssSobreTotal - inssSobreSipes);
     }
 
-    // 3. CÁLCULO DO IRRF (DE ACORDO COM A LEI)
+    // 3. CÁLCULO DO IRRF (CONFORME LEI 2026 - LEI Nº 15.270/2025)
     double irrf = 0.0;
     double irrfBrutoFinal = 0.0;
     double irrfSipesFinal = 0.0;
-    double descontoSimplificado = geral['desconto_simplificado'] ?? 564.80; 
+    double descontoSimplificado = geral['desconto_simplificado'] ?? 607.20; 
 
     if (temIrrf) {
-      // REGRA LEGAL: Soma-se o Convênio com o SIPES para a base de cálculo
+      // REGRA LEGAL: Rendimento Tributável (Convênio + SIPES)
       double baseTotalIR = valorBrutoConvenio + valorSipes;
       
-      // ISENÇÃO LEGAL: Somente para quem ganha TOTAL até R$ 5.000,00
-      if (baseTotalIR <= 5000.0) {
-        irrf = 0.0;
-      } else {
-        // Cálculo do Imposto Total (Convênio + SIPES)
-        // Comparando Deduções Legais vs Desconto Simplificado
-        double baseLegalTotal = baseTotalIR - inssSobreTotal - pensao; 
-        double impostoLegalTotal = baseLegalTotal > 0 ? _calcularIrrf(baseLegalTotal, tabelaIrrf) : 0.0;
+      // 3.1 Cálculo do Imposto Total Global (Convênio + SIPES)
+      // Comparando Deduções Legais vs Desconto Simplificado
+      double baseLegalTotal = baseTotalIR - inssSobreTotal - pensao; 
+      double impostoLegalTotal = baseLegalTotal > 0 ? _calcularIrrf(baseLegalTotal, tabelaIrrf) : 0.0;
 
-        double baseSimplesTotal = baseTotalIR - descontoSimplificado;
-        double impostoSimplesTotal = baseSimplesTotal > 0 ? _calcularIrrf(baseSimplesTotal, tabelaIrrf) : 0.0;
+      double baseSimplesTotal = baseTotalIR - descontoSimplificado;
+      double impostoSimplesTotal = baseSimplesTotal > 0 ? _calcularIrrf(baseSimplesTotal, tabelaIrrf) : 0.0;
 
-        double irrfTotalGlobal = min(impostoLegalTotal, impostoSimplesTotal);
+      // Escolhe o menor imposto antes do redutor
+      double irrfTotalNormal = min(impostoLegalTotal, impostoSimplesTotal);
+      
+      // APLICAÇÃO DO REDUTOR 2026 NO TOTAL
+      irrfBrutoFinal = _aplicarRedutor2026(irrfTotalNormal, baseTotalIR);
 
-        // Cálculo do Imposto que já incide sobre o SIPES (Estado)
-        double baseLegalSipes = valorSipes - inssSobreSipes;
-        double impostoLegalSipes = baseLegalSipes > 0 ? _calcularIrrf(baseLegalSipes, tabelaIrrf) : 0.0;
+      // 3.2 Cálculo do Imposto pago sobre o SIPES (Estado)
+      double baseLegalSipes = valorSipes - inssSobreSipes;
+      double impostoLegalSipes = baseLegalSipes > 0 ? _calcularIrrf(baseLegalSipes, tabelaIrrf) : 0.0;
 
-        double baseSimplesSipes = valorSipes - descontoSimplificado;
-        double impostoSimplesSipes = baseSimplesSipes > 0 ? _calcularIrrf(baseSimplesSipes, tabelaIrrf) : 0.0;
+      double baseSimplesSipes = valorSipes - descontoSimplificado;
+      double impostoSimplesSipes = baseSimplesSipes > 0 ? _calcularIrrf(baseSimplesSipes, tabelaIrrf) : 0.0;
 
-        irrfSipesFinal = min(impostoLegalSipes, impostoSimplesSipes);
-        
-        // IRRF DEVIDO NO CONVÊNIO: É a diferença (Encontro de Contas do IR)
-        irrf = max(0, irrfTotalGlobal - irrfSipesFinal);
-        irrfBrutoFinal = irrfTotalGlobal;
-      }
+      double irrfSipesNormal = min(impostoLegalSipes, impostoSimplesSipes);
+      
+      // APLICAÇÃO DO REDUTOR 2026 NO SIPES
+      irrfSipesFinal = _aplicarRedutor2026(irrfSipesNormal, valorSipes);
+      
+      // 3.3 IRRF DEVIDO NO CONVÊNIO: Diferença (Encontro de Contas)
+      irrf = max(0, irrfBrutoFinal - irrfSipesFinal);
     }
 
     // LÍQUIDO FINAL
@@ -93,6 +94,21 @@ class CalculadoraTaxas {
       'liquido': _arredondar(liquido),
       'sipes': _arredondar(valorSipes),
     };
+  }
+
+  static double _aplicarRedutor2026(double imposto, double rendimento) {
+    // Rendimentos até R$ 5.000,00: Isento
+    if (rendimento <= 5000.0) return 0.0;
+    
+    // Rendimentos entre 5.000,01 e 7.350,00: Redução Decrescente
+    // Fórmula: Redução = 978,62 – (0,133145 × Rendimento Tributável)
+    if (rendimento <= 7350.0) {
+      double reducao = 978.62 - (0.133145 * rendimento);
+      return max(0, imposto - reducao);
+    }
+    
+    // Acima de 7.350,00: Cálculo Normal (sem redutor adicional)
+    return imposto;
   }
 
   static double _calcularInssProgressivo(double salario, List<Map<String, dynamic>> tabela) {

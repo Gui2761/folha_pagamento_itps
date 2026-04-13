@@ -168,20 +168,20 @@ class DatabaseHelper {
     await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('base_convenio', 210000.00)");
     await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('aliquota_patronal', 9.02)");
     await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('teto_inss', 8475.55)"); 
-    await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('desconto_simplificado', 564.80)");
+    await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('desconto_simplificado', 607.20)");
 
-    // TABELA INSS (ESPELHO DA FÓRMULA DO RH COM O MÍNIMO DE 1518)
-    await db.execute("INSERT INTO config_inss (limite, aliquota) VALUES (1518.00, 7.5)");
-    await db.execute("INSERT INTO config_inss (limite, aliquota) VALUES (2793.88, 9.0)");
-    await db.execute("INSERT INTO config_inss (limite, aliquota) VALUES (4190.83, 12.0)");
+    // TABELA INSS 2026 (SALÁRIO MÍNIMO R$ 1.621,00)
+    await db.execute("INSERT INTO config_inss (limite, aliquota) VALUES (1621.00, 7.5)");
+    await db.execute("INSERT INTO config_inss (limite, aliquota) VALUES (2902.84, 9.0)");
+    await db.execute("INSERT INTO config_inss (limite, aliquota) VALUES (4354.27, 12.0)");
     await db.execute("INSERT INTO config_inss (limite, aliquota) VALUES (8475.55, 14.0)");
 
-    // TABELA IRRF (COM A REGRA ATUAL DO RH)
-    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (2428.80, 0.0, 0.0)");
-    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (2826.65, 7.5, 182.16)"); 
-    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (3751.05, 15.0, 394.16)");
-    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (4664.68, 22.5, 675.49)");
-    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (999999999.00, 27.5, 908.73)");
+    // TABELA IRRF 2026 (BASE PROGRESSIVA PARA O CÁLCULO DO REDUTOR)
+    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (2259.20, 0.0, 0.0)");
+    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (2826.65, 7.5, 169.44)"); 
+    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (3751.05, 15.0, 381.44)");
+    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (4664.68, 22.5, 662.77)");
+    await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (999999999.00, 27.5, 896.00)");
   }
 
   // === CRUD FUNCIONÁRIOS ===

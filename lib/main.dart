@@ -5,7 +5,6 @@ import 'package:intl/intl.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:excel/excel.dart' as excel_pkg; 
 import 'package:file_selector/file_selector.dart';
-import 'package:path_provider/path_provider.dart';
 import 'database_helper.dart';
 import 'calculadora_taxas.dart';
 
@@ -109,6 +108,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final configs = await DatabaseHelper.instance.loadFullConfig();
     final funcs = await DatabaseHelper.instance.readFuncionarios();
     final cargos = await DatabaseHelper.instance.readCargos();
+    if (!mounted) return;
     setState(() {
       _configData = configs;
       _funcionarios = funcs;
@@ -625,7 +625,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 _buildInfoCard("Base Convênio", baseConvenio, Icons.account_balance, Colors.grey),
                 _buildInfoCard("Total Bruto", totalBrutoGeral, Icons.attach_money, Colors.blue, isBold: true),
-                _buildInfoCard("Patronal/RAT (${aliquotaPatronal}%)", valorPatronal, Icons.business, Colors.orange),
+                _buildInfoCard("Patronal/RAT ($aliquotaPatronal%)", valorPatronal, Icons.business, Colors.orange),
                 _buildInfoCard("Retirada Total", totalRetirada, Icons.account_balance_wallet, Colors.green, isBold: true),
               ],
             ),
@@ -699,7 +699,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider()),
                                     
                                     DropdownButtonFormField<int>(
-                                      value: _selectedCargoId,
+                                      initialValue: _selectedCargoId,
                                       isExpanded: true,
                                       decoration: const InputDecoration(labelText: "Selecionar Cargo (Lista)", prefixIcon: Icon(Icons.list_alt)),
                                       items: _cargos.map((c) => DropdownMenuItem<int>(value: c['id'], child: Text("${c['nome']}", overflow: TextOverflow.ellipsis))).toList(),
@@ -954,7 +954,7 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
     await showDialog(context: context, builder: (ctx) => AlertDialog(
       title: const Text("Editar Faixa INSS"),
       content: Column(mainAxisSize: MainAxisSize.min, children: [TextField(controller: limiteCtrl, decoration: const InputDecoration(labelText: "Limite (R\$)")), const SizedBox(height: 10), TextField(controller: aliquotaCtrl, decoration: const InputDecoration(labelText: "Alíquota (%)"))]),
-      actions: [TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")), TextButton(onPressed: () async { await DatabaseHelper.instance.updateTabelaInss(item['id'], double.tryParse(limiteCtrl.text) ?? 0.0, double.tryParse(aliquotaCtrl.text) ?? 0.0); if (mounted) Navigator.pop(ctx); _carregarDados(); widget.onSave(); }, child: const Text("Salvar"))],
+      actions: [TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")), TextButton(onPressed: () async { await DatabaseHelper.instance.updateTabelaInss(item['id'], double.tryParse(limiteCtrl.text) ?? 0.0, double.tryParse(aliquotaCtrl.text) ?? 0.0); if (context.mounted) { Navigator.pop(ctx); _carregarDados(); widget.onSave(); } }, child: const Text("Salvar"))],
     ));
   }
 
@@ -965,7 +965,7 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
     await showDialog(context: context, builder: (ctx) => AlertDialog(
       title: const Text("Editar Faixa IRRF"),
       content: Column(mainAxisSize: MainAxisSize.min, children: [TextField(controller: limiteCtrl, decoration: const InputDecoration(labelText: "Limite (R\$)")), const SizedBox(height: 10), TextField(controller: aliquotaCtrl, decoration: const InputDecoration(labelText: "Alíquota (%)")), const SizedBox(height: 10), TextField(controller: deducaoCtrl, decoration: const InputDecoration(labelText: "Dedução (R\$)"))]),
-      actions: [TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")), TextButton(onPressed: () async { await DatabaseHelper.instance.updateTabelaIrrf(item['id'], double.tryParse(limiteCtrl.text) ?? 0.0, double.tryParse(aliquotaCtrl.text) ?? 0.0, double.tryParse(deducaoCtrl.text) ?? 0.0); if (mounted) Navigator.pop(ctx); _carregarDados(); widget.onSave(); }, child: const Text("Salvar"))],
+      actions: [TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")), TextButton(onPressed: () async { await DatabaseHelper.instance.updateTabelaIrrf(item['id'], double.tryParse(limiteCtrl.text) ?? 0.0, double.tryParse(aliquotaCtrl.text) ?? 0.0, double.tryParse(deducaoCtrl.text) ?? 0.0); if (context.mounted) { Navigator.pop(ctx); _carregarDados(); widget.onSave(); } }, child: const Text("Salvar"))],
     ));
   }
 
@@ -1006,7 +1006,8 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
                 await DatabaseHelper.instance.updateCargo(dados);
               }
 
-              if(mounted) Navigator.pop(ctx);
+              if(!context.mounted) return;
+              Navigator.pop(ctx);
               _carregarDados();
               widget.onSave();
             },
