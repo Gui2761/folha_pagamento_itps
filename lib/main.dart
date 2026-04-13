@@ -969,15 +969,16 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
     ));
   }
 
-  Future<void> _adicionarCargo() async {
-    final nomeCtrl = TextEditingController();
-    final locacaoCtrl = TextEditingController(); 
-    final percCtrl = TextEditingController();
+  // Função que serve tanto para CRIAR quanto para EDITAR cargos
+  Future<void> _abrirDialogoCargo({Map<String, dynamic>? cargo}) async {
+    final nomeCtrl = TextEditingController(text: cargo?['nome'] ?? '');
+    final locacaoCtrl = TextEditingController(text: cargo?['locacao'] ?? ''); 
+    final percCtrl = TextEditingController(text: cargo?['percentual_padrao']?.toString() ?? '');
     
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Novo Cargo"),
+        title: Text(cargo == null ? "Novo Cargo" : "Editar Cargo"),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -992,11 +993,19 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
           TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")),
           TextButton(
             onPressed: () async {
-              await DatabaseHelper.instance.createCargo({
+              final dados = {
                 'nome': nomeCtrl.text,
                 'locacao': locacaoCtrl.text, 
                 'percentual_padrao': double.tryParse(percCtrl.text) ?? 0.0
-              });
+              };
+
+              if (cargo == null) {
+                await DatabaseHelper.instance.createCargo(dados);
+              } else {
+                dados['id'] = cargo['id'];
+                await DatabaseHelper.instance.updateCargo(dados);
+              }
+
               if(mounted) Navigator.pop(ctx);
               _carregarDados();
               widget.onSave();
@@ -1018,7 +1027,43 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
       body: TabBarView(controller: _tabController, children: [
           ListView(padding: const EdgeInsets.all(20), children: [const Text("Valores Base", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)), const SizedBox(height: 10), TextField(controller: _baseCtrl, decoration: const InputDecoration(labelText: "Base Convênio (R\$)", border: OutlineInputBorder())), const SizedBox(height: 10), TextField(controller: _tetoInssCtrl, decoration: const InputDecoration(labelText: "Teto INSS (R\$)", border: OutlineInputBorder())), const SizedBox(height: 10), TextField(controller: _patronalCtrl, decoration: const InputDecoration(labelText: "Patronal (%)", border: OutlineInputBorder())), const SizedBox(height: 20), ElevatedButton(onPressed: _salvarGeral, child: const Text("SALVAR"))]),
           ListView(padding: const EdgeInsets.all(20), children: [const Text("Tabela INSS", style: TextStyle(fontWeight: FontWeight.bold)), ..._tabelaInss.map((r) => ListTile(title: Text("Até R\$ ${r['limite']}"), subtitle: Text("${r['aliquota']}%"), trailing: IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _editarFaixaInss(r)))), const Divider(), const Text("Tabela IRRF", style: TextStyle(fontWeight: FontWeight.bold)), ..._tabelaIrrf.map((r) => ListTile(title: Text("Até R\$ ${r['limite']}"), subtitle: Text("${r['aliquota']}% (Ded: ${r['deducao']})"), trailing: IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _editarFaixaIrrf(r))))]),
-          Column(children: [Padding(padding: const EdgeInsets.all(10.0), child: ElevatedButton.icon(onPressed: _adicionarCargo, icon: const Icon(Icons.add), label: const Text("Novo Cargo"))), Expanded(child: ListView.builder(itemCount: _cargosLocais.length, itemBuilder: (ctx, i) { final c = _cargosLocais[i]; return ListTile(title: Text(c['nome']), subtitle: Text("${c['locacao'] ?? 'Sem setor'} - ${c['percentual_padrao']}%"), trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => _deletarCargo(c['id']))); }))])
+          Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(10.0), 
+                child: ElevatedButton.icon(
+                  onPressed: () => _abrirDialogoCargo(), 
+                  icon: const Icon(Icons.add), 
+                  label: const Text("Novo Cargo")
+                )
+              ), 
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _cargosLocais.length, 
+                  itemBuilder: (ctx, i) { 
+                    final c = _cargosLocais[i]; 
+                    return ListTile(
+                      title: Text(c['nome']), 
+                      subtitle: Text("${c['locacao'] ?? 'Sem setor'} - ${c['percentual_padrao']}%"), 
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.edit, color: Colors.blue), 
+                            onPressed: () => _abrirDialogoCargo(cargo: c)
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete, color: Colors.red), 
+                            onPressed: () => _deletarCargo(c['id'])
+                          ),
+                        ],
+                      )
+                    ); 
+                  }
+                )
+              )
+            ]
+          )
       ]),
     );
   }
