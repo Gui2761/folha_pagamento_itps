@@ -215,7 +215,15 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> readCargos() async {
     final db = await instance.database;
+    // Garante a ordem alfabética ao carregar a lista
     return await db.query('cargos', orderBy: 'nome ASC');
+  }
+
+  // Adicione esta função para permitir a edição do cargo
+  Future<int> updateCargo(Map<String, dynamic> row) async {
+    final db = await instance.database;
+    int id = row['id'];
+    return await db.update('cargos', row, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<int> deleteCargo(int id) async {
