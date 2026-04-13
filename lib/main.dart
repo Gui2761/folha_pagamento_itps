@@ -82,6 +82,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _sipesCtrl = TextEditingController(); 
   final _pensaoCtrl = TextEditingController();
   final _outrosCtrl = TextEditingController();
+  final _acrescimosCtrl = TextEditingController(); 
   
   // Scrolls
   final ScrollController _horizontalScroll = ScrollController();
@@ -91,6 +92,9 @@ class _HomeScreenState extends State<HomeScreen> {
   int? _selectedCargoId;
   bool _temInss = false;
   bool _temIrrf = true;
+
+  // Variável para controlar a visibilidade do formulário
+  bool _mostrarFormulario = false;
 
   final _money = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
 
@@ -130,19 +134,21 @@ class _HomeScreenState extends State<HomeScreen> {
         'valor_sipes': _parseMoeda(_sipesCtrl.text),
         'pensao': _parseMoeda(_pensaoCtrl.text),
         'outros': _parseMoeda(_outrosCtrl.text),
+        'acrescimos': _parseMoeda(_acrescimosCtrl.text), 
         'tem_inss': _temInss ? 1 : 0,
         'tem_irrf': _temIrrf ? 1 : 0,
       };
 
       if (_editingId == null) {
         await DatabaseHelper.instance.createFuncionario(dados);
-        if (mounted) _mostrarSnack("Funcionário cadastrado!", Colors.green);
+        if (mounted) _mostrarSnack("Colaborador cadastrado!", Colors.green);
       } else {
         dados['id'] = _editingId!;
         await DatabaseHelper.instance.updateFuncionario(dados);
         if (mounted) _mostrarSnack("Dados atualizados!", Colors.blue);
       }
       _limparForm();
+      setState(() => _mostrarFormulario = false); // Fecha o form ao salvar
       _refreshTudo();
     }
   }
@@ -152,7 +158,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return double.tryParse(limpa) ?? 0.0;
   }
   
-  // PROTEÇÃO CONTRA TELA VERMELHA
   String _formatMoeda(double? valor) {
     if (valor == null) return "R\$ 0,00";
     return _money.format(valor);
@@ -160,6 +165,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _carregarParaEdicao(Map<String, dynamic> f) {
     setState(() {
+      _mostrarFormulario = true; // Abre o formulário ao editar
       _editingId = f['id'];
       _nomeCtrl.text = f['nome'];
       _cpfCtrl.text = f['cpf'];
@@ -174,6 +180,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _sipesCtrl.text = _formatMoeda(f['valor_sipes']);
       _pensaoCtrl.text = _formatMoeda(f['pensao'] ?? 0.0);
       _outrosCtrl.text = _formatMoeda(f['outros'] ?? 0.0);
+      _acrescimosCtrl.text = _formatMoeda(f['acrescimos'] ?? 0.0);
       _temInss = f['tem_inss'] == 1;
       _temIrrf = f['tem_irrf'] == 1;
       _selectedCargoId = null; 
@@ -185,6 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _agenciaCtrl.clear(); _contaCtrl.clear(); _percentualCtrl.clear();
     _cargoManualCtrl.clear(); _locacaoCtrl.clear(); 
     _sipesCtrl.clear(); _pensaoCtrl.clear(); _outrosCtrl.clear();
+    _acrescimosCtrl.clear();
     setState(() {
       _editingId = null; _selectedCargoId = null; _vinculoSelecionado = 'Efetivo';
       _temInss = false; _temIrrf = true;
@@ -195,32 +203,32 @@ class _HomeScreenState extends State<HomeScreen> {
     if (novoVinculo == null) return;
     setState(() {
       _vinculoSelecionado = novoVinculo;
-      if (novoVinculo == 'Efetivo') _temInss = false;
-      else _temInss = true;
-      _temIrrf = true;
+      if (novoVinculo == 'Efetivo') {
+        _temInss = false;
+        _temIrrf = true;
+      } else if (novoVinculo == 'Estagiário') {
+        _temInss = false;
+        _temIrrf = false;
+      } else {
+        _temInss = true;
+        _temIrrf = true;
+      }
     });
   }
 
-  // === MUDANÇA DE CARGO (AUTO PREENCHIMENTO DE LOCAÇÃO) ===
   void _onCargoChanged(int? novoId) {
     setState(() {
       _selectedCargoId = novoId;
     });
     if (novoId != null) {
       final cargo = _cargos.firstWhere((c) => c['id'] == novoId);
-      
-      // PREENCHE NOME
       _cargoManualCtrl.text = cargo['nome'];
 
-      // PREENCHE LOCAÇÃO
-      // Se a locação estiver salva no banco, usa ela.
       if (cargo['locacao'] != null && cargo['locacao'].toString().isNotEmpty) {
         _locacaoCtrl.text = cargo['locacao'];
       } else {
         _locacaoCtrl.text = "";
       }
-
-      // PREENCHE PORCENTAGEM
       _percentualCtrl.text = cargo['percentual_padrao'].toString();
     }
   }
@@ -230,7 +238,7 @@ class _HomeScreenState extends State<HomeScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: cor));
   }
 
-  // === EXPORTAR EXCEL COM ABAS (MANTIDO COMPLETO) ===
+  // === EXPORTAR EXCEL ===
   Future<void> _exportarExcel() async {
     if (_funcionarios.isEmpty) {
       _mostrarSnack("Não há dados para exportar.", Colors.red);
@@ -253,40 +261,39 @@ class _HomeScreenState extends State<HomeScreen> {
       horizontalAlign: excel_pkg.HorizontalAlign.Center,
     );
 
-    // 1. ABA RESUMO GERENCIAL
     excel_pkg.Sheet sheetResumo = excel['Resumo Gerencial'];
-    List<String> headersResumo = ['CATEGORIA', 'BRUTO', 'INSS', 'IRRF', 'PENSÃO', 'OUTROS', 'TOTAL DESC.', 'LÍQUIDO'];
+    List<String> headersResumo = ['CATEGORIA', 'BRUTO', 'INSS', 'IRRF', 'PENSÃO', 'OUTROS', 'TOTAL DESC.', 'ACRÉSCIMOS', 'LÍQUIDO'];
     sheetResumo.appendRow(headersResumo.map((e) => excel_pkg.TextCellValue(e)).toList());
     
     for(int i=0; i<headersResumo.length; i++) {
       sheetResumo.cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0)).cellStyle = styleHeaderResumo;
     }
 
-    List<String> categorias = ['Efetivo', 'Comissionado', 'Cedido'];
-    double gBruto=0, gInss=0, gIrrf=0, gPensao=0, gOutros=0, gDesc=0, gLiquido=0;
+    List<String> categorias = ['Efetivo', 'Comissionado', 'Cedido', 'Estagiário'];
+    double gBruto=0, gInss=0, gIrrf=0, gPensao=0, gOutros=0, gDesc=0, gAcres=0, gLiquido=0;
 
     for (var cat in categorias) {
       var lista = _funcionarios.where((f) => f['vinculo'] == cat).toList();
-      double tBruto=0, tInss=0, tIrrf=0, tPensao=0, tOutros=0, tLiquido=0;
+      double tBruto=0, tInss=0, tIrrf=0, tPensao=0, tOutros=0, tAcres=0, tLiquido=0;
 
       for (var f in lista) {
         final calc = CalculadoraTaxas.calcularFolha(
           percentual: f['percentual'], valorSipes: f['valor_sipes'], pensao: f['pensao'] ?? 0,
-          outros: f['outros'] ?? 0, temInss: f['tem_inss'] == 1, temIrrf: f['tem_irrf'] == 1,
+          outros: f['outros'] ?? 0, acrescimos: f['acrescimos'] ?? 0.0, temInss: f['tem_inss'] == 1, temIrrf: f['tem_irrf'] == 1,
           configData: _configData!,
         );
         tBruto += calc['bruto'] ?? 0.0; tInss += calc['inss'] ?? 0.0; tIrrf += calc['irrf'] ?? 0.0;
-        tPensao += f['pensao'] ?? 0; tOutros += f['outros'] ?? 0; tLiquido += calc['liquido'] ?? 0.0;
+        tPensao += f['pensao'] ?? 0; tOutros += f['outros'] ?? 0; tAcres += f['acrescimos'] ?? 0; tLiquido += calc['liquido'] ?? 0.0;
       }
       
       double tDescontos = tInss + tIrrf + tPensao + tOutros;
-      gBruto+=tBruto; gInss+=tInss; gIrrf+=tIrrf; gPensao+=tPensao; gOutros+=tOutros; gDesc+=tDescontos; gLiquido+=tLiquido;
+      gBruto+=tBruto; gInss+=tInss; gIrrf+=tIrrf; gPensao+=tPensao; gOutros+=tOutros; gDesc+=tDescontos; gAcres+=tAcres; gLiquido+=tLiquido;
 
       sheetResumo.appendRow([
         excel_pkg.TextCellValue(cat.toUpperCase()),
         excel_pkg.DoubleCellValue(tBruto), excel_pkg.DoubleCellValue(tInss), excel_pkg.DoubleCellValue(tIrrf),
         excel_pkg.DoubleCellValue(tPensao), excel_pkg.DoubleCellValue(tOutros),
-        excel_pkg.DoubleCellValue(tDescontos), excel_pkg.DoubleCellValue(tLiquido)
+        excel_pkg.DoubleCellValue(tDescontos), excel_pkg.DoubleCellValue(tAcres), excel_pkg.DoubleCellValue(tLiquido)
       ]);
     }
 
@@ -294,15 +301,14 @@ class _HomeScreenState extends State<HomeScreen> {
       excel_pkg.TextCellValue('TOTAL GERAL'),
       excel_pkg.DoubleCellValue(gBruto), excel_pkg.DoubleCellValue(gInss), excel_pkg.DoubleCellValue(gIrrf),
       excel_pkg.DoubleCellValue(gPensao), excel_pkg.DoubleCellValue(gOutros),
-      excel_pkg.DoubleCellValue(gDesc), excel_pkg.DoubleCellValue(gLiquido)
+      excel_pkg.DoubleCellValue(gDesc), excel_pkg.DoubleCellValue(gAcres), excel_pkg.DoubleCellValue(gLiquido)
     ]);
 
-    // 2. ABAS DE LISTAS COMPLETAS
     for (var cat in categorias) {
       var lista = _funcionarios.where((f) => f['vinculo'] == cat).toList();
       if (lista.isNotEmpty) {
         excel_pkg.Sheet sheetCat = excel['Lista $cat'];
-        List<String> headersDet = ['NOME COMPLETO', 'CPF', 'RG', 'BANCO', 'AGÊNCIA', 'CONTA', 'CARGO', 'LOCAÇÃO', 'SIPES', '%', 'BRUTO', 'INSS', 'IRRF', 'PENSÃO', 'OUTROS', 'LÍQUIDO'];
+        List<String> headersDet = ['NOME COMPLETO', 'CPF', 'RG', 'BANCO', 'AGÊNCIA', 'CONTA', 'CARGO', 'LOCAÇÃO', 'SIPES', '%', 'BRUTO', 'INSS', 'IRRF', 'PENSÃO', 'OUTROS', 'ACRÉSCIMOS', 'LÍQUIDO'];
         sheetCat.appendRow(headersDet.map((e) => excel_pkg.TextCellValue(e)).toList());
 
         for(int i=0; i<headersDet.length; i++) {
@@ -312,7 +318,7 @@ class _HomeScreenState extends State<HomeScreen> {
         for (var f in lista) {
            final calc = CalculadoraTaxas.calcularFolha(
               percentual: f['percentual'], valorSipes: f['valor_sipes'], pensao: f['pensao']??0,
-              outros: f['outros']??0, temInss: f['tem_inss']==1, temIrrf: f['tem_irrf']==1,
+              outros: f['outros']??0, acrescimos: f['acrescimos'] ?? 0.0, temInss: f['tem_inss']==1, temIrrf: f['tem_irrf']==1,
               configData: _configData!,
             );
             sheetCat.appendRow([
@@ -321,13 +327,13 @@ class _HomeScreenState extends State<HomeScreen> {
               excel_pkg.TextCellValue(f['cargo_nome']), excel_pkg.TextCellValue(f['locacao'] ?? ''),
               excel_pkg.DoubleCellValue(f['valor_sipes']), excel_pkg.DoubleCellValue(f['percentual']),
               excel_pkg.DoubleCellValue(calc['bruto'] ?? 0.0), excel_pkg.DoubleCellValue(calc['inss'] ?? 0.0), excel_pkg.DoubleCellValue(calc['irrf'] ?? 0.0),
-              excel_pkg.DoubleCellValue(f['pensao'] ?? 0), excel_pkg.DoubleCellValue(f['outros'] ?? 0), excel_pkg.DoubleCellValue(calc['liquido'] ?? 0.0),
+              excel_pkg.DoubleCellValue(f['pensao'] ?? 0), excel_pkg.DoubleCellValue(f['outros'] ?? 0), excel_pkg.DoubleCellValue(f['acrescimos'] ?? 0), excel_pkg.DoubleCellValue(calc['liquido'] ?? 0.0),
             ]);
         }
       }
     }
 
-    final String fileName = "folha_itps_completa_v5_${DateFormat('dd-MM-yyyy').format(DateTime.now())}.xlsx";
+    final String fileName = "folha_itps_v8_sincronizada_${DateFormat('dd-MM-yyyy').format(DateTime.now())}.xlsx";
     final FileSaveLocation? result = await getSaveLocation(suggestedName: fileName);
     
     if (result != null) {
@@ -340,32 +346,34 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // === RELATÓRIO NA TELA (BLINDADO) ===
+  // === RELATÓRIO NA TELA ===
   void _mostrarRelatorioNaTela() {
     Map<String, double> somar(List<Map<String, dynamic>> lista) {
-      double tBruto=0, tInss=0, tIrrf=0, tPensao=0, tOutros=0, tLiquido=0;
+      double tBruto=0, tInss=0, tIrrf=0, tPensao=0, tOutros=0, tAcres=0, tLiquido=0;
       for (var f in lista) {
         final calc = CalculadoraTaxas.calcularFolha(
           percentual: f['percentual'], valorSipes: f['valor_sipes'], pensao: f['pensao']??0,
-          outros: f['outros']??0, temInss: f['tem_inss']==1, temIrrf: f['tem_irrf']==1,
+          outros: f['outros']??0, acrescimos: f['acrescimos'] ?? 0.0, temInss: f['tem_inss']==1, temIrrf: f['tem_irrf']==1,
           configData: _configData!,
         );
         tBruto += calc['bruto'] ?? 0.0; 
         tInss += calc['inss'] ?? 0.0; 
         tIrrf += calc['irrf'] ?? 0.0;
-        tPensao += f['pensao']??0; tOutros += f['outros']??0; 
+        tPensao += f['pensao']??0; tOutros += f['outros']??0; tAcres += f['acrescimos']??0;
         tLiquido += calc['liquido'] ?? 0.0;
       }
-      return {'bruto': tBruto, 'inss': tInss, 'irrf': tIrrf, 'pensao': tPensao, 'outros': tOutros, 'liquido': tLiquido};
+      return {'bruto': tBruto, 'inss': tInss, 'irrf': tIrrf, 'pensao': tPensao, 'outros': tOutros, 'acrescimos': tAcres, 'liquido': tLiquido};
     }
 
     var efetivos = _funcionarios.where((f) => f['vinculo'] == 'Efetivo').toList();
     var comissionados = _funcionarios.where((f) => f['vinculo'] == 'Comissionado').toList();
     var cedidos = _funcionarios.where((f) => f['vinculo'] == 'Cedido').toList();
+    var estagiarios = _funcionarios.where((f) => f['vinculo'] == 'Estagiário').toList();
 
     var sEfetivos = somar(efetivos);
     var sComissionados = somar(comissionados);
     var sCedidos = somar(cedidos);
+    var sEstagiarios = somar(estagiarios);
 
     Widget linhaTabela(String titulo, Map<String, double> dados, {bool isTotal = false}) {
       double descontos = (dados['inss'] ?? 0) + (dados['irrf'] ?? 0) + (dados['pensao'] ?? 0) + (dados['outros'] ?? 0);
@@ -378,9 +386,8 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(child: Text(_formatMoeda(dados['bruto']), style: style)),
             Expanded(child: Text(_formatMoeda(dados['inss']), style: style.copyWith(color: Colors.red[700]))),
             Expanded(child: Text(_formatMoeda(dados['irrf']), style: style.copyWith(color: Colors.red[700]))),
-            Expanded(child: Text(_formatMoeda(dados['pensao']), style: style.copyWith(color: Colors.orange[800]))),
-            Expanded(child: Text(_formatMoeda(dados['outros']), style: style.copyWith(color: Colors.orange[800]))),
             Expanded(child: Text(_formatMoeda(descontos), style: style.copyWith(fontWeight: FontWeight.bold))),
+            Expanded(child: Text(_formatMoeda(dados['acrescimos']), style: style.copyWith(color: Colors.green[600]))),
             Expanded(child: Text(_formatMoeda(dados['liquido']), style: style.copyWith(color: Colors.green[800], fontWeight: FontWeight.bold))),
           ],
         ),
@@ -404,9 +411,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   Expanded(child: Text("BRUTO", style: TextStyle(fontWeight: FontWeight.bold))),
                   Expanded(child: Text("INSS", style: TextStyle(fontWeight: FontWeight.bold))),
                   Expanded(child: Text("IRRF", style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(child: Text("PENSÃO", style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(child: Text("OUTROS", style: TextStyle(fontWeight: FontWeight.bold))),
                   Expanded(child: Text("T. DESC.", style: TextStyle(fontWeight: FontWeight.bold))),
+                  Expanded(child: Text("ACRÉSC.", style: TextStyle(fontWeight: FontWeight.bold))),
                   Expanded(child: Text("LÍQUIDO", style: TextStyle(fontWeight: FontWeight.bold))),
                 ]),
               ),
@@ -416,14 +422,17 @@ class _HomeScreenState extends State<HomeScreen> {
               linhaTabela("Folha Comissionados (${comissionados.length})", sComissionados),
               const Divider(),
               linhaTabela("Folha Cedidos (${cedidos.length})", sCedidos),
+              const Divider(),
+              linhaTabela("Folha Estagiários (${estagiarios.length})", sEstagiarios),
               const Divider(thickness: 2),
                linhaTabela("TOTAL GERAL", {
-                 'bruto': (sEfetivos['bruto']! + sComissionados['bruto']! + sCedidos['bruto']!),
-                 'inss': (sEfetivos['inss']! + sComissionados['inss']! + sCedidos['inss']!),
-                 'irrf': (sEfetivos['irrf']! + sComissionados['irrf']! + sCedidos['irrf']!),
-                 'pensao': (sEfetivos['pensao']! + sComissionados['pensao']! + sCedidos['pensao']!),
-                 'outros': (sEfetivos['outros']! + sComissionados['outros']! + sCedidos['outros']!),
-                 'liquido': (sEfetivos['liquido']! + sComissionados['liquido']! + sCedidos['liquido']!),
+                 'bruto': (sEfetivos['bruto']! + sComissionados['bruto']! + sCedidos['bruto']! + sEstagiarios['bruto']!),
+                 'inss': (sEfetivos['inss']! + sComissionados['inss']! + sCedidos['inss']! + sEstagiarios['inss']!),
+                 'irrf': (sEfetivos['irrf']! + sComissionados['irrf']! + sCedidos['irrf']! + sEstagiarios['irrf']!),
+                 'pensao': (sEfetivos['pensao']! + sComissionados['pensao']! + sCedidos['pensao']! + sEstagiarios['pensao']!),
+                 'outros': (sEfetivos['outros']! + sComissionados['outros']! + sCedidos['outros']! + sEstagiarios['outros']!),
+                 'acrescimos': (sEfetivos['acrescimos']! + sComissionados['acrescimos']! + sCedidos['acrescimos']! + sEstagiarios['acrescimos']!),
+                 'liquido': (sEfetivos['liquido']! + sComissionados['liquido']! + sCedidos['liquido']! + sEstagiarios['liquido']!),
                }, isTotal: true),
             ],
           ),
@@ -444,7 +453,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // === DETALHES BLINDADOS ===
   void _mostrarDetalhesCalculo(String nome, Map<String, dynamic> calc) {
     double inssTotal = calc['inss_total'] ?? 0.0;
     double inssSipes = calc['inss_sipes'] ?? 0.0;
@@ -479,7 +487,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Text("= IRRF a Pagar: ${_formatMoeda(irrfFinal)}", style: const TextStyle(fontWeight: FontWeight.bold)),
               
               const SizedBox(height: 20),
-              const Text("* O sistema comparou automaticamente o Desconto Simplificado vs. Deduções Legais.", style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.grey)),
+              const Text("* Sincronizado com os parâmetros do RH.", style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.grey)),
             ],
           ),
         ),
@@ -492,7 +500,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     if (_isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
-    // Cálculos do Dashboard
     double totalBrutoGeral = 0;
     double baseConvenio = _configData!['geral']['base_convenio'] ?? 210000.00;
     double aliquotaPatronal = _configData!['geral']['aliquota_patronal'] ?? 9.02;
@@ -505,6 +512,7 @@ class _HomeScreenState extends State<HomeScreen> {
         valorSipes: f['valor_sipes'],
         pensao: f['pensao'] ?? 0.0,
         outros: f['outros'] ?? 0.0,
+        acrescimos: f['acrescimos'] ?? 0.0,
         temInss: f['tem_inss'] == 1,
         temIrrf: f['tem_irrf'] == 1,
         configData: _configData!,
@@ -529,7 +537,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ])),
         DataCell(Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(color: f['vinculo'] == 'Efetivo' ? Colors.blue[50] : (f['vinculo'] == 'Comissionado' ? Colors.green[50] : Colors.orange[50]), borderRadius: BorderRadius.circular(10), border: Border.all(color: f['vinculo'] == 'Efetivo' ? Colors.blue.shade200 : (f['vinculo'] == 'Comissionado' ? Colors.green.shade200 : Colors.orange.shade200))),
+          decoration: BoxDecoration(color: f['vinculo'] == 'Efetivo' ? Colors.blue[50] : (f['vinculo'] == 'Comissionado' ? Colors.green[50] : (f['vinculo'] == 'Estagiário' ? Colors.purple[50] : Colors.orange[50])), borderRadius: BorderRadius.circular(10), border: Border.all(color: f['vinculo'] == 'Efetivo' ? Colors.blue.shade200 : (f['vinculo'] == 'Comissionado' ? Colors.green.shade200 : (f['vinculo'] == 'Estagiário' ? Colors.purple.shade200 : Colors.orange.shade200)))),
           child: Text(f['vinculo'] ?? '-', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
         )),
         DataCell(Text(_formatMoeda(f['valor_sipes']), style: const TextStyle(color: Colors.grey))),
@@ -539,6 +547,7 @@ class _HomeScreenState extends State<HomeScreen> {
         DataCell(Text(f['tem_irrf'] == 1 ? _formatMoeda(calc['irrf']) : "-", style: TextStyle(color: Colors.red[700]))),
         DataCell(Text(_formatMoeda(f['pensao']), style: TextStyle(color: Colors.orange[800]))), 
         DataCell(Text(_formatMoeda(f['outros']), style: TextStyle(color: Colors.orange[800]))), 
+        DataCell(Text(_formatMoeda(f['acrescimos']), style: TextStyle(color: Colors.green[600]))), 
         DataCell(Text(_formatMoeda(calc['liquido']), style: const TextStyle(color: Color(0xFF00695C), fontWeight: FontWeight.w900))),
         DataCell(Row(
           mainAxisSize: MainAxisSize.min,
@@ -591,6 +600,21 @@ class _HomeScreenState extends State<HomeScreen> {
           )
         ],
       ),
+      
+      // BOTÃO FLUTUANTE PARA ABRIR O FORMULÁRIO
+      floatingActionButton: !_mostrarFormulario 
+        ? FloatingActionButton.extended(
+            onPressed: () {
+              _limparForm();
+              setState(() => _mostrarFormulario = true);
+            },
+            icon: const Icon(Icons.person_add),
+            label: const Text("Novo Colaborador"),
+            backgroundColor: const Color(0xFF0D47A1),
+            foregroundColor: Colors.white,
+          )
+        : null,
+      
       body: Column(
         children: [
           Container(
@@ -611,122 +635,134 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch, 
               children: [
-                Container(
-                  width: 380,
-                  padding: const EdgeInsets.all(16),
-                  child: Card(
-                    elevation: 4,
-                    shadowColor: Colors.black26,
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Form(
-                        key: _formKey,
-                        child: Column(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Colors.black12))),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(_editingId != null ? "Editar" : "Novo Cadastro", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _editingId != null ? Colors.orange[800] : const Color(0xFF0D47A1))),
-                                  if (_editingId != null) IconButton(icon: const Icon(Icons.close), onPressed: _limparForm, tooltip: "Cancelar Edição")
-                                ],
+                // Formulário Lateral Condicional
+                if (_mostrarFormulario)
+                  Container(
+                    width: 380,
+                    padding: const EdgeInsets.all(16),
+                    child: Card(
+                      elevation: 4,
+                      shadowColor: Colors.black26,
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.only(bottom: 16),
+                                decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Colors.black12))),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(_editingId != null ? "Editar" : "Novo Cadastro", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _editingId != null ? Colors.orange[800] : const Color(0xFF0D47A1))),
+                                    IconButton(
+                                      icon: const Icon(Icons.close), 
+                                      onPressed: () {
+                                        _limparForm();
+                                        setState(() => _mostrarFormulario = false);
+                                      }, 
+                                      tooltip: "Fechar"
+                                    )
+                                  ],
+                                ),
                               ),
-                            ),
-                            
-                            Expanded(
-                              child: ListView(
-                                padding: const EdgeInsets.only(top: 16),
-                                children: [
-                                  TextFormField(controller: _nomeCtrl, decoration: const InputDecoration(labelText: "Nome Completo", prefixIcon: Icon(Icons.person)), validator: (v)=>v!.isEmpty?'Obrigatório':null),
-                                  const SizedBox(height: 12),
-                                  Row(children: [
-                                    Expanded(child: TextFormField(controller: _cpfCtrl, keyboardType: TextInputType.number, inputFormatters: [CpfInputFormatter()], decoration: const InputDecoration(labelText: "CPF", prefixIcon: Icon(Icons.badge), hintText: "000.000.000-00"))),
-                                    const SizedBox(width: 8),
-                                    Expanded(child: TextFormField(controller: _rgCtrl, decoration: const InputDecoration(labelText: "RG"))),
-                                  ]),
-                                  const SizedBox(height: 12),
-                                  DropdownButtonFormField<String>(
-                                    value: _vinculoSelecionado,
-                                    decoration: const InputDecoration(labelText: "Vínculo", prefixIcon: Icon(Icons.work)),
-                                    items: ['Efetivo', 'Comissionado', 'Cedido'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-                                    onChanged: _onVinculoChanged,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  TextFormField(controller: _bancoCtrl, decoration: const InputDecoration(labelText: "Banco", prefixIcon: Icon(Icons.account_balance))),
-                                  const SizedBox(height: 12),
-                                  Row(children: [
-                                    Expanded(child: TextFormField(controller: _agenciaCtrl, decoration: const InputDecoration(labelText: "Agência"))),
-                                    const SizedBox(width: 8),
-                                    Expanded(child: TextFormField(controller: _contaCtrl, decoration: const InputDecoration(labelText: "Conta"))),
-                                  ]),
-                                  
-                                  const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider()),
-                                  
-                                  DropdownButtonFormField<int>(
-                                    value: _selectedCargoId,
-                                    isExpanded: true,
-                                    decoration: const InputDecoration(labelText: "Selecionar Cargo (Lista)", prefixIcon: Icon(Icons.list_alt)),
-                                    items: _cargos.map((c) => DropdownMenuItem<int>(value: c['id'], child: Text("${c['nome']}", overflow: TextOverflow.ellipsis))).toList(),
-                                    onChanged: _onCargoChanged,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  TextFormField(controller: _cargoManualCtrl, decoration: const InputDecoration(labelText: "Nome do Cargo")),
-                                  const SizedBox(height: 12),
-                                  TextFormField(controller: _locacaoCtrl, decoration: const InputDecoration(labelText: "Locação / Setor")),
-                                  
-                                  const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider()),
-                                  const Text("Valores & Descontos", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
-                                  const SizedBox(height: 8),
+                              
+                              Expanded(
+                                child: ListView(
+                                  // CORREÇÃO: padding right 16 para a scrollbar
+                                  padding: const EdgeInsets.only(top: 16, right: 16),
+                                  children: [
+                                    TextFormField(controller: _nomeCtrl, decoration: const InputDecoration(labelText: "Nome Completo", prefixIcon: Icon(Icons.person)), validator: (v)=>v!.isEmpty?'Obrigatório':null),
+                                    const SizedBox(height: 12),
+                                    Row(children: [
+                                      Expanded(child: TextFormField(controller: _cpfCtrl, keyboardType: TextInputType.number, inputFormatters: [CpfInputFormatter()], decoration: const InputDecoration(labelText: "CPF", prefixIcon: Icon(Icons.badge), hintText: "000.000.000-00"))),
+                                      const SizedBox(width: 8),
+                                      Expanded(child: TextFormField(controller: _rgCtrl, decoration: const InputDecoration(labelText: "RG"))),
+                                    ]),
+                                    const SizedBox(height: 12),
+                                    DropdownButtonFormField<String>(
+                                      value: _vinculoSelecionado,
+                                      decoration: const InputDecoration(labelText: "Vínculo", prefixIcon: Icon(Icons.work)),
+                                      items: ['Efetivo', 'Comissionado', 'Cedido', 'Estagiário'].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+                                      onChanged: _onVinculoChanged,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    TextFormField(controller: _bancoCtrl, decoration: const InputDecoration(labelText: "Banco", prefixIcon: Icon(Icons.account_balance))),
+                                    const SizedBox(height: 12),
+                                    Row(children: [
+                                      Expanded(child: TextFormField(controller: _agenciaCtrl, decoration: const InputDecoration(labelText: "Agência"))),
+                                      const SizedBox(width: 8),
+                                      Expanded(child: TextFormField(controller: _contaCtrl, decoration: const InputDecoration(labelText: "Conta"))),
+                                    ]),
+                                    
+                                    const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider()),
+                                    
+                                    DropdownButtonFormField<int>(
+                                      value: _selectedCargoId,
+                                      isExpanded: true,
+                                      decoration: const InputDecoration(labelText: "Selecionar Cargo (Lista)", prefixIcon: Icon(Icons.list_alt)),
+                                      items: _cargos.map((c) => DropdownMenuItem<int>(value: c['id'], child: Text("${c['nome']}", overflow: TextOverflow.ellipsis))).toList(),
+                                      onChanged: _onCargoChanged,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    TextFormField(controller: _cargoManualCtrl, decoration: const InputDecoration(labelText: "Nome do Cargo")),
+                                    const SizedBox(height: 12),
+                                    TextFormField(controller: _locacaoCtrl, decoration: const InputDecoration(labelText: "Locação / Setor")),
+                                    
+                                    const Padding(padding: EdgeInsets.symmetric(vertical: 16), child: Divider()),
+                                    const Text("Valores & Descontos", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+                                    const SizedBox(height: 8),
 
-                                  Row(
-                                    children: [
-                                      Expanded(child: TextFormField(controller: _percentualCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: "%", suffixText: "%", prefixIcon: Icon(Icons.percent)))),
-                                      const SizedBox(width: 8),
-                                      Expanded(child: TextFormField(controller: _sipesCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "SIPES"))),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Row(
-                                    children: [
-                                      Expanded(child: TextFormField(controller: _pensaoCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "Pensão"))),
-                                      const SizedBox(width: 8),
-                                      Expanded(child: TextFormField(controller: _outrosCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "Outros"))),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Container(
-                                    decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8)),
-                                    child: Column(
+                                    Row(
                                       children: [
-                                        CheckboxListTile(title: const Text("Descontar INSS"), secondary: const Icon(Icons.account_circle), value: _temInss, onChanged: (v)=>setState(()=>_temInss=v!), activeColor: const Color(0xFF0D47A1)),
-                                        const Divider(height: 1),
-                                        CheckboxListTile(title: const Text("Descontar IRRF"), secondary: const Icon(Icons.request_quote), value: _temIrrf, onChanged: (v)=>setState(()=>_temIrrf=v!), activeColor: const Color(0xFF0D47A1)),
+                                        Expanded(child: TextFormField(controller: _percentualCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: "%", suffixText: "%", prefixIcon: Icon(Icons.percent)))),
+                                        const SizedBox(width: 8),
+                                        Expanded(child: TextFormField(controller: _sipesCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "SIPES"))),
                                       ],
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(child: TextFormField(controller: _pensaoCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "Pensão"))),
+                                        const SizedBox(width: 8),
+                                        Expanded(child: TextFormField(controller: _outrosCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "Outros"))),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 12),
+                                    TextFormField(controller: _acrescimosCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "Acréscimos (Aux. Transp.)", prefixIcon: Icon(Icons.add_circle_outline, color: Colors.green))),
+                                    const SizedBox(height: 12),
+                                    Container(
+                                      decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8)),
+                                      child: Column(
+                                        children: [
+                                          CheckboxListTile(title: const Text("Descontar INSS"), secondary: const Icon(Icons.account_circle), value: _temInss, onChanged: (v)=>setState(()=>_temInss=v!), activeColor: const Color(0xFF0D47A1)),
+                                          const Divider(height: 1),
+                                          CheckboxListTile(title: const Text("Descontar IRRF"), secondary: const Icon(Icons.request_quote), value: _temIrrf, onChanged: (v)=>setState(()=>_temIrrf=v!), activeColor: const Color(0xFF0D47A1)),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            
-                            const SizedBox(height: 16),
-                            SizedBox(
-                              width: double.infinity,
-                              height: 50,
-                              child: ElevatedButton.icon(
-                                onPressed: _salvarOuAtualizar, 
-                                icon: Icon(_editingId != null ? Icons.save : Icons.add_circle),
-                                label: Text(_editingId != null ? "SALVAR ALTERAÇÕES" : "ADICIONAR FUNCIONÁRIO"),
-                                style: ElevatedButton.styleFrom(backgroundColor: _editingId != null ? Colors.orange[800] : const Color(0xFF0D47A1), foregroundColor: Colors.white, elevation: 2, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), 
-                              ),
-                            )
-                          ],
+                              
+                              const SizedBox(height: 16),
+                              SizedBox(
+                                width: double.infinity,
+                                height: 50,
+                                child: ElevatedButton.icon(
+                                  onPressed: _salvarOuAtualizar, 
+                                  icon: Icon(_editingId != null ? Icons.save : Icons.add_circle),
+                                  label: Text(_editingId != null ? "SALVAR ALTERAÇÕES" : "ADICIONAR COLABORADOR"),
+                                  style: ElevatedButton.styleFrom(backgroundColor: _editingId != null ? Colors.orange[800] : const Color(0xFF0D47A1), foregroundColor: Colors.white, elevation: 2, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))), 
+                                ),
+                              )
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
                 
                 Expanded(
                   child: Padding(
@@ -742,7 +778,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               children: [
                                 const Icon(Icons.people_alt, color: Colors.grey),
                                 const SizedBox(width: 10),
-                                Text("Lista de Funcionários (${rows.length})", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                Text("Lista de Colaboradores (${rows.length})", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                               ],
                             ),
                           ),
@@ -758,7 +794,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     controller: _horizontalScroll,
                                     scrollDirection: Axis.horizontal,
                                     child: ConstrainedBox(
-                                      constraints: BoxConstraints(minHeight: constraints.maxHeight, minWidth: 1500),
+                                      constraints: BoxConstraints(minHeight: constraints.maxHeight, minWidth: 1600),
                                       child: Scrollbar(
                                         controller: _verticalScroll,
                                         thumbVisibility: true,
@@ -785,6 +821,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               DataColumn(label: Text("IRRF", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))), 
                                               DataColumn(label: Text("PENSÃO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))), 
                                               DataColumn(label: Text("OUTROS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))), 
+                                              DataColumn(label: Text("ACRÉSC.", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green))), 
                                               DataColumn(label: Text("LÍQUIDO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green))), 
                                               DataColumn(label: Text("AÇÕES", style: TextStyle(fontWeight: FontWeight.bold))),
                                             ],
@@ -835,7 +872,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// CLASSES AUXILIARES
 class CurrencyInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
@@ -933,10 +969,9 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
     ));
   }
 
-  // === NOVO CARGO COM LOCAÇÃO ===
   Future<void> _adicionarCargo() async {
     final nomeCtrl = TextEditingController();
-    final locacaoCtrl = TextEditingController(); // Novo Controller
+    final locacaoCtrl = TextEditingController(); 
     final percCtrl = TextEditingController();
     
     await showDialog(
@@ -948,7 +983,7 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
           children: [
             TextField(controller: nomeCtrl, decoration: const InputDecoration(labelText: "Nome do Cargo")),
             const SizedBox(height: 10),
-            TextField(controller: locacaoCtrl, decoration: const InputDecoration(labelText: "Locação/Setor Padrão")), // Novo Campo
+            TextField(controller: locacaoCtrl, decoration: const InputDecoration(labelText: "Locação/Setor Padrão")), 
             const SizedBox(height: 10),
             TextField(controller: percCtrl, decoration: const InputDecoration(labelText: "Percentual (%)"), keyboardType: TextInputType.number),
           ],
@@ -959,7 +994,7 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
             onPressed: () async {
               await DatabaseHelper.instance.createCargo({
                 'nome': nomeCtrl.text,
-                'locacao': locacaoCtrl.text, // Salva a locação
+                'locacao': locacaoCtrl.text, 
                 'percentual_padrao': double.tryParse(percCtrl.text) ?? 0.0
               });
               if(mounted) Navigator.pop(ctx);
