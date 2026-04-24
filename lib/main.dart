@@ -95,7 +95,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Variável para controlar a visibilidade do formulário
   bool _mostrarFormulario = false;
 
-  final _money = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+
 
   @override
   void initState() {
@@ -153,28 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  double _parseMoeda(String text) {
-    if (text.isEmpty) return 0.0;
-    // Remove o símbolo R$ e espaços
-    String clean = text.replaceAll('R\$', '').trim();
-    
-    // Lógica inteligente para identificar o separador decimal:
-    // Se houver vírgula e ponto (ex: 1.234,56), o ponto é milhar e a vírgula é decimal.
-    if (clean.contains(',') && clean.contains('.')) {
-      clean = clean.replaceAll('.', ''); // Remove milhar
-      clean = clean.replaceAll(',', '.'); // Converte decimal
-    } else {
-      // Se houver apenas um deles, tratamos como separador decimal
-      clean = clean.replaceAll(',', '.');
-    }
-    
-    return double.tryParse(clean) ?? 0.0;
-  }
-  
-  String _formatMoeda(double? valor) {
-    if (valor == null) return "R\$ 0,00";
-    return _money.format(valor);
-  }
+
 
   void _carregarParaEdicao(Map<String, dynamic> f) {
     setState(() {
@@ -618,16 +597,14 @@ class _HomeScreenState extends State<HomeScreen> {
       
       // BOTÃO FLUTUANTE PARA ABRIR O FORMULÁRIO
       floatingActionButton: !_mostrarFormulario 
-        ? FloatingActionButton.extended(
-            heroTag: "fab_novo_colaborador", // Tag única para evitar erro de Hero
+        ? FloatingActionButton(
+            heroTag: null,
             onPressed: () {
               _limparForm();
               setState(() => _mostrarFormulario = true);
             },
-            icon: const Icon(Icons.person_add),
-            label: const Text("Novo Colaborador"),
             backgroundColor: const Color(0xFF0D47A1),
-            foregroundColor: Colors.white,
+            child: const Icon(Icons.person_add, color: Colors.white),
           )
         : null,
       
@@ -892,8 +869,10 @@ class DecimalInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
     if (newValue.text.isEmpty) return newValue;
-    // Permite apenas números e um único separador (ponto ou vírgula)
-    final regExp = RegExp(r'^\d*[.,]?\d*$');
+    // Permite números, pontos e vírgulas em qualquer ordem.
+    // O _parseMoeda cuida de limpar e converter depois.
+    // Isso permite apagar caracteres um por um mesmo com a máscara ativada.
+    final regExp = RegExp(r'^[0-9.,]*$');
     if (regExp.hasMatch(newValue.text)) {
       return newValue;
     }
@@ -904,9 +883,13 @@ class DecimalInputFormatter extends TextInputFormatter {
 class CurrencyInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    // Se o usuário apagar tudo, deixa apagar
+    if (newValue.text.isEmpty) return newValue;
+    
     if (newValue.selection.baseOffset == 0) return newValue;
     String text = newValue.text.replaceAll(RegExp('[^0-9]'), '');
-    if (text.isEmpty) text = '0';
+    if (text.isEmpty) return const TextEditingValue(text: "");
+    
     double value = double.parse(text);
     final formatter = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
     String newText = formatter.format(value / 100);
@@ -939,9 +922,8 @@ class ConfigScreen extends StatefulWidget {
 
 class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  late TextEditingController _baseCtrl;
-  late TextEditingController _tetoInssCtrl;
-  late TextEditingController _patronalCtrl;
+  final TextEditingController _baseCtrl = TextEditingController();
+  final TextEditingController _patronalCtrl = TextEditingController();
   List<Map<String, dynamic>> _cargosLocais = [];
   List<Map<String, dynamic>> _tabelaInss = [];
   List<Map<String, dynamic>> _tabelaIrrf = [];
@@ -962,9 +944,12 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
 
     final brFormat = NumberFormat.currency(locale: 'pt_BR', symbol: '');
     setState(() {
-      _baseCtrl = TextEditingController(text: brFormat.format(base).trim());
-      _tetoInssCtrl = TextEditingController(text: brFormat.format(teto).trim());
-      _patronalCtrl = TextEditingController(text: brFormat.format(patronal).trim());
+      String novaBase = brFormat.format(base).trim();
+      if (_baseCtrl.text.isEmpty) _baseCtrl.text = novaBase;
+
+      String novoPatr = brFormat.format(patronal).trim();
+      if (_patronalCtrl.text.isEmpty) _patronalCtrl.text = novoPatr;
+
       _cargosLocais = List.from(cargos);
       _tabelaInss = List.from(configs['inss']);
       _tabelaIrrf = List.from(configs['irrf']);
@@ -972,9 +957,8 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
   }
 
   Future<void> _salvarGeral() async {
-    await DatabaseHelper.instance.updateConfigValor('base_convenio', double.tryParse(_baseCtrl.text.replaceAll(',', '.')) ?? 0.0);
-    await DatabaseHelper.instance.updateConfigValor('teto_inss', double.tryParse(_tetoInssCtrl.text.replaceAll(',', '.')) ?? 0.0);
-    await DatabaseHelper.instance.updateConfigValor('aliquota_patronal', double.tryParse(_patronalCtrl.text.replaceAll(',', '.')) ?? 0.0);
+    await DatabaseHelper.instance.updateConfigValor('base_convenio', _parseMoeda(_baseCtrl.text));
+    await DatabaseHelper.instance.updateConfigValor('aliquota_patronal', _parseMoeda(_patronalCtrl.text));
     if (!mounted) return;
     widget.onSave();
     if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Configurações salvas!")));
@@ -1101,8 +1085,6 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
             const SizedBox(height: 10), 
             TextField(controller: _baseCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Base Convênio (R\$)", border: OutlineInputBorder())), 
             const SizedBox(height: 10), 
-            TextField(controller: _tetoInssCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Teto INSS (R\$)", border: OutlineInputBorder())), 
-            const SizedBox(height: 10), 
             TextField(controller: _patronalCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Patronal (%)", border: OutlineInputBorder())), 
             const SizedBox(height: 20), 
             ElevatedButton(onPressed: _salvarGeral, child: const Text("SALVAR"))
@@ -1162,4 +1144,24 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
       ]),
     );
   }
+}
+
+// === UTILITÁRIOS GLOBAIS DE FORMATAÇÃO ===
+final _moneyFormatter = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+
+double _parseMoeda(String text) {
+  if (text.isEmpty) return 0.0;
+  String clean = text.replaceAll('R\$', '').trim();
+  if (clean.contains(',') && clean.contains('.')) {
+    clean = clean.replaceAll('.', '');
+    clean = clean.replaceAll(',', '.');
+  } else {
+    clean = clean.replaceAll(',', '.');
+  }
+  return double.tryParse(clean) ?? 0.0;
+}
+
+String _formatMoeda(double? valor) {
+  if (valor == null) return "R\$ 0,00";
+  return _moneyFormatter.format(valor);
 }
