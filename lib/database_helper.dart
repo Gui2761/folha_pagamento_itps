@@ -257,9 +257,9 @@ class DatabaseHelper {
     await db.insert('config_geral', {'chave': chave, 'valor': valor}, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<void> updateTabelaInss(int id, double limite, double aliquota) async {
+  Future<void> updateTabelaInss(int id, double limite, double aliquota, double deducao) async {
     final db = await instance.database;
-    await db.update('config_inss', {'limite': limite, 'aliquota': aliquota}, where: 'id = ?', whereArgs: [id]);
+    await db.update('config_inss', {'limite': limite, 'aliquota': aliquota, 'deducao': deducao}, where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> updateTabelaIrrf(int id, double limite, double aliquota, double deducao) async {

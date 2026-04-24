@@ -154,8 +154,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   double _parseMoeda(String text) {
-    String limpa = text.replaceAll('R\$', '').replaceAll('.', '').replaceAll(',', '.').trim();
-    return double.tryParse(limpa) ?? 0.0;
+    if (text.isEmpty) return 0.0;
+    // Remove o símbolo R$ e espaços
+    String clean = text.replaceAll('R\$', '').trim();
+    
+    // Lógica inteligente para identificar o separador decimal:
+    // Se houver vírgula e ponto (ex: 1.234,56), o ponto é milhar e a vírgula é decimal.
+    if (clean.contains(',') && clean.contains('.')) {
+      clean = clean.replaceAll('.', ''); // Remove milhar
+      clean = clean.replaceAll(',', '.'); // Converte decimal
+    } else {
+      // Se houver apenas um deles, tratamos como separador decimal
+      clean = clean.replaceAll(',', '.');
+    }
+    
+    return double.tryParse(clean) ?? 0.0;
   }
   
   String _formatMoeda(double? valor) {
@@ -176,7 +189,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _contaCtrl.text = f['conta'] ?? '';
       _cargoManualCtrl.text = f['cargo_nome'] ?? '';
       _locacaoCtrl.text = f['locacao'] ?? '';
-      _percentualCtrl.text = f['percentual'].toString();
+      final brFormat = NumberFormat.currency(locale: 'pt_BR', symbol: '');
+      _percentualCtrl.text = brFormat.format(f['percentual']).trim();
       _sipesCtrl.text = _formatMoeda(f['valor_sipes']);
       _pensaoCtrl.text = _formatMoeda(f['pensao'] ?? 0.0);
       _outrosCtrl.text = _formatMoeda(f['outros'] ?? 0.0);
@@ -229,7 +243,8 @@ class _HomeScreenState extends State<HomeScreen> {
       } else {
         _locacaoCtrl.text = "";
       }
-      _percentualCtrl.text = cargo['percentual_padrao'].toString();
+      final brFormat = NumberFormat.currency(locale: 'pt_BR', symbol: '');
+      _percentualCtrl.text = brFormat.format(cargo['percentual_padrao']).trim();
     }
   }
 
@@ -604,6 +619,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // BOTÃO FLUTUANTE PARA ABRIR O FORMULÁRIO
       floatingActionButton: !_mostrarFormulario 
         ? FloatingActionButton.extended(
+            heroTag: "fab_novo_colaborador", // Tag única para evitar erro de Hero
             onPressed: () {
               _limparForm();
               setState(() => _mostrarFormulario = true);
@@ -716,21 +732,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
                                     Row(
                                       children: [
-                                        Expanded(child: TextFormField(controller: _percentualCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: "%", suffixText: "%", prefixIcon: Icon(Icons.percent)))),
+                                        Expanded(child: TextFormField(controller: _percentualCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "%", suffixText: "%", prefixIcon: Icon(Icons.percent)))),
                                         const SizedBox(width: 8),
-                                        Expanded(child: TextFormField(controller: _sipesCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "SIPES"))),
+                                        Expanded(child: TextFormField(controller: _sipesCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "SIPES", prefixIcon: Icon(Icons.money_off)))),
                                       ],
                                     ),
                                     const SizedBox(height: 12),
                                     Row(
                                       children: [
-                                        Expanded(child: TextFormField(controller: _pensaoCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "Pensão"))),
+                                        Expanded(child: TextFormField(controller: _pensaoCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Pensão"))),
                                         const SizedBox(width: 8),
-                                        Expanded(child: TextFormField(controller: _outrosCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "Outros"))),
+                                        Expanded(child: TextFormField(controller: _outrosCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Outros"))),
                                       ],
                                     ),
                                     const SizedBox(height: 12),
-                                    TextFormField(controller: _acrescimosCtrl, keyboardType: TextInputType.number, inputFormatters: [CurrencyInputFormatter()], decoration: const InputDecoration(labelText: "Acréscimos (Aux. Transp.)", prefixIcon: Icon(Icons.add_circle_outline, color: Colors.green))),
+                                    TextFormField(controller: _acrescimosCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Acréscimos (Aux. Transp.)", prefixIcon: Icon(Icons.add_circle_outline, color: Colors.green))),
                                     const SizedBox(height: 12),
                                     Container(
                                       decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(8)),
@@ -872,11 +888,26 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+class DecimalInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    if (newValue.text.isEmpty) return newValue;
+    // Permite apenas números e um único separador (ponto ou vírgula)
+    final regExp = RegExp(r'^\d*[.,]?\d*$');
+    if (regExp.hasMatch(newValue.text)) {
+      return newValue;
+    }
+    return oldValue;
+  }
+}
+
 class CurrencyInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
     if (newValue.selection.baseOffset == 0) return newValue;
-    double value = double.parse(newValue.text.replaceAll(RegExp('[^0-9]'), ''));
+    String text = newValue.text.replaceAll(RegExp('[^0-9]'), '');
+    if (text.isEmpty) text = '0';
+    double value = double.parse(text);
     final formatter = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
     String newText = formatter.format(value / 100);
     return newValue.copyWith(text: newText, selection: TextSelection.collapsed(offset: newText.length));
@@ -929,10 +960,11 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
     double teto = configs['geral']['teto_inss'] ?? 8475.55;
     double patronal = configs['geral']['aliquota_patronal'] ?? 9.02;
 
+    final brFormat = NumberFormat.currency(locale: 'pt_BR', symbol: '');
     setState(() {
-      _baseCtrl = TextEditingController(text: base.toString());
-      _tetoInssCtrl = TextEditingController(text: teto.toString());
-      _patronalCtrl = TextEditingController(text: patronal.toString());
+      _baseCtrl = TextEditingController(text: brFormat.format(base).trim());
+      _tetoInssCtrl = TextEditingController(text: brFormat.format(teto).trim());
+      _patronalCtrl = TextEditingController(text: brFormat.format(patronal).trim());
       _cargosLocais = List.from(cargos);
       _tabelaInss = List.from(configs['inss']);
       _tabelaIrrf = List.from(configs['irrf']);
@@ -940,40 +972,78 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
   }
 
   Future<void> _salvarGeral() async {
-    await DatabaseHelper.instance.updateConfigValor('base_convenio', double.parse(_baseCtrl.text));
-    await DatabaseHelper.instance.updateConfigValor('teto_inss', double.parse(_tetoInssCtrl.text));
-    await DatabaseHelper.instance.updateConfigValor('aliquota_patronal', double.parse(_patronalCtrl.text));
+    await DatabaseHelper.instance.updateConfigValor('base_convenio', double.tryParse(_baseCtrl.text.replaceAll(',', '.')) ?? 0.0);
+    await DatabaseHelper.instance.updateConfigValor('teto_inss', double.tryParse(_tetoInssCtrl.text.replaceAll(',', '.')) ?? 0.0);
+    await DatabaseHelper.instance.updateConfigValor('aliquota_patronal', double.tryParse(_patronalCtrl.text.replaceAll(',', '.')) ?? 0.0);
     if (!mounted) return;
     widget.onSave();
     if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Configurações salvas!")));
   }
 
   Future<void> _editarFaixaInss(Map<String, dynamic> item) async {
-    final limiteCtrl = TextEditingController(text: item['limite'].toString());
-    final aliquotaCtrl = TextEditingController(text: item['aliquota'].toString());
+    final brFormat = NumberFormat.currency(locale: 'pt_BR', symbol: '');
+    final limiteCtrl = TextEditingController(text: brFormat.format(item['limite']).trim());
+    final aliquotaCtrl = TextEditingController(text: brFormat.format(item['aliquota']).trim());
+    final deducaoCtrl = TextEditingController(text: brFormat.format(item['deducao'] ?? 0.0).trim());
     await showDialog(context: context, builder: (ctx) => AlertDialog(
       title: const Text("Editar Faixa INSS"),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [TextField(controller: limiteCtrl, decoration: const InputDecoration(labelText: "Limite (R\$)")), const SizedBox(height: 10), TextField(controller: aliquotaCtrl, decoration: const InputDecoration(labelText: "Alíquota (%)"))]),
-      actions: [TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")), TextButton(onPressed: () async { await DatabaseHelper.instance.updateTabelaInss(item['id'], double.tryParse(limiteCtrl.text) ?? 0.0, double.tryParse(aliquotaCtrl.text) ?? 0.0); if (context.mounted) { Navigator.pop(ctx); _carregarDados(); widget.onSave(); } }, child: const Text("Salvar"))],
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: limiteCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Limite (R\$)")), 
+        const SizedBox(height: 10), 
+        TextField(controller: aliquotaCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Alíquota (%)")),
+        const SizedBox(height: 10),
+        TextField(controller: deducaoCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Dedução (R\$)")),
+      ]),
+      actions: [
+        TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")), 
+        TextButton(onPressed: () async { 
+          await DatabaseHelper.instance.updateTabelaInss(
+            item['id'], 
+            double.tryParse(limiteCtrl.text.replaceAll(',', '.')) ?? 0.0, 
+            double.tryParse(aliquotaCtrl.text.replaceAll(',', '.')) ?? 0.0,
+            double.tryParse(deducaoCtrl.text.replaceAll(',', '.')) ?? 0.0,
+          ); 
+          if (context.mounted) { Navigator.pop(ctx); _carregarDados(); widget.onSave(); } 
+        }, child: const Text("Salvar"))
+      ],
     ));
   }
 
   Future<void> _editarFaixaIrrf(Map<String, dynamic> item) async {
-    final limiteCtrl = TextEditingController(text: item['limite'].toString());
-    final aliquotaCtrl = TextEditingController(text: item['aliquota'].toString());
-    final deducaoCtrl = TextEditingController(text: item['deducao'].toString());
+    final brFormat = NumberFormat.currency(locale: 'pt_BR', symbol: '');
+    final limiteCtrl = TextEditingController(text: brFormat.format(item['limite']).trim());
+    final aliquotaCtrl = TextEditingController(text: brFormat.format(item['aliquota']).trim());
+    final deducaoCtrl = TextEditingController(text: brFormat.format(item['deducao']).trim());
     await showDialog(context: context, builder: (ctx) => AlertDialog(
       title: const Text("Editar Faixa IRRF"),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [TextField(controller: limiteCtrl, decoration: const InputDecoration(labelText: "Limite (R\$)")), const SizedBox(height: 10), TextField(controller: aliquotaCtrl, decoration: const InputDecoration(labelText: "Alíquota (%)")), const SizedBox(height: 10), TextField(controller: deducaoCtrl, decoration: const InputDecoration(labelText: "Dedução (R\$)"))]),
-      actions: [TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")), TextButton(onPressed: () async { await DatabaseHelper.instance.updateTabelaIrrf(item['id'], double.tryParse(limiteCtrl.text) ?? 0.0, double.tryParse(aliquotaCtrl.text) ?? 0.0, double.tryParse(deducaoCtrl.text) ?? 0.0); if (context.mounted) { Navigator.pop(ctx); _carregarDados(); widget.onSave(); } }, child: const Text("Salvar"))],
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: limiteCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Limite (R\$)")), 
+        const SizedBox(height: 10), 
+        TextField(controller: aliquotaCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Alíquota (%)")), 
+        const SizedBox(height: 10), 
+        TextField(controller: deducaoCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Dedução (R\$)"))
+      ]),
+      actions: [
+        TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text("Cancelar")), 
+        TextButton(onPressed: () async { 
+          await DatabaseHelper.instance.updateTabelaIrrf(
+            item['id'], 
+            double.tryParse(limiteCtrl.text.replaceAll(',', '.')) ?? 0.0, 
+            double.tryParse(aliquotaCtrl.text.replaceAll(',', '.')) ?? 0.0, 
+            double.tryParse(deducaoCtrl.text.replaceAll(',', '.')) ?? 0.0
+          ); 
+          if (context.mounted) { Navigator.pop(ctx); _carregarDados(); widget.onSave(); } 
+        }, child: const Text("Salvar"))
+      ],
     ));
   }
 
   // Função que serve tanto para CRIAR quanto para EDITAR cargos
   Future<void> _abrirDialogoCargo({Map<String, dynamic>? cargo}) async {
+    final brFormat = NumberFormat.currency(locale: 'pt_BR', symbol: '');
     final nomeCtrl = TextEditingController(text: cargo?['nome'] ?? '');
     final locacaoCtrl = TextEditingController(text: cargo?['locacao'] ?? ''); 
-    final percCtrl = TextEditingController(text: cargo?['percentual_padrao']?.toString() ?? '');
+    final percCtrl = TextEditingController(text: cargo != null ? brFormat.format(cargo['percentual_padrao']).trim() : '');
     
     await showDialog(
       context: context,
@@ -986,7 +1056,7 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
             const SizedBox(height: 10),
             TextField(controller: locacaoCtrl, decoration: const InputDecoration(labelText: "Locação/Setor Padrão")), 
             const SizedBox(height: 10),
-            TextField(controller: percCtrl, decoration: const InputDecoration(labelText: "Percentual (%)"), keyboardType: TextInputType.number),
+            TextField(controller: percCtrl, decoration: const InputDecoration(labelText: "Percentual (%)"), keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()]),
           ],
         ),
         actions: [
@@ -996,7 +1066,7 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
               final dados = {
                 'nome': nomeCtrl.text,
                 'locacao': locacaoCtrl.text, 
-                'percentual_padrao': double.tryParse(percCtrl.text) ?? 0.0
+                'percentual_padrao': double.tryParse(percCtrl.text.replaceAll(',', '.')) ?? 0.0
               };
 
               if (cargo == null) {
@@ -1026,8 +1096,32 @@ class _ConfigScreenState extends State<ConfigScreen> with SingleTickerProviderSt
     return Scaffold(
       appBar: AppBar(title: const Text("Configurações"), bottom: TabBar(controller: _tabController, tabs: const [Tab(text: "Geral"), Tab(text: "Tabelas"), Tab(text: "Cargos")])),
       body: TabBarView(controller: _tabController, children: [
-          ListView(padding: const EdgeInsets.all(20), children: [const Text("Valores Base", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)), const SizedBox(height: 10), TextField(controller: _baseCtrl, decoration: const InputDecoration(labelText: "Base Convênio (R\$)", border: OutlineInputBorder())), const SizedBox(height: 10), TextField(controller: _tetoInssCtrl, decoration: const InputDecoration(labelText: "Teto INSS (R\$)", border: OutlineInputBorder())), const SizedBox(height: 10), TextField(controller: _patronalCtrl, decoration: const InputDecoration(labelText: "Patronal (%)", border: OutlineInputBorder())), const SizedBox(height: 20), ElevatedButton(onPressed: _salvarGeral, child: const Text("SALVAR"))]),
-          ListView(padding: const EdgeInsets.all(20), children: [const Text("Tabela INSS", style: TextStyle(fontWeight: FontWeight.bold)), ..._tabelaInss.map((r) => ListTile(title: Text("Até R\$ ${r['limite']}"), subtitle: Text("${r['aliquota']}%"), trailing: IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _editarFaixaInss(r)))), const Divider(), const Text("Tabela IRRF", style: TextStyle(fontWeight: FontWeight.bold)), ..._tabelaIrrf.map((r) => ListTile(title: Text("Até R\$ ${r['limite']}"), subtitle: Text("${r['aliquota']}% (Ded: ${r['deducao']})"), trailing: IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _editarFaixaIrrf(r))))]),
+          ListView(padding: const EdgeInsets.all(20), children: [
+            const Text("Valores Base", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)), 
+            const SizedBox(height: 10), 
+            TextField(controller: _baseCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Base Convênio (R\$)", border: OutlineInputBorder())), 
+            const SizedBox(height: 10), 
+            TextField(controller: _tetoInssCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Teto INSS (R\$)", border: OutlineInputBorder())), 
+            const SizedBox(height: 10), 
+            TextField(controller: _patronalCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), inputFormatters: [DecimalInputFormatter()], decoration: const InputDecoration(labelText: "Patronal (%)", border: OutlineInputBorder())), 
+            const SizedBox(height: 20), 
+            ElevatedButton(onPressed: _salvarGeral, child: const Text("SALVAR"))
+          ]),
+          ListView(padding: const EdgeInsets.all(20), children: [
+            const Text("Tabela INSS", style: TextStyle(fontWeight: FontWeight.bold)), 
+            ..._tabelaInss.map((r) => ListTile(
+              title: Text("Até R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '').format(r['limite']).trim()}"), 
+              subtitle: Text("${r['aliquota']}% (Ded: ${NumberFormat.currency(locale: 'pt_BR', symbol: '').format(r['deducao'] ?? 0.0).trim()})"), 
+              trailing: IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _editarFaixaInss(r))
+            )), 
+            const Divider(), 
+            const Text("Tabela IRRF", style: TextStyle(fontWeight: FontWeight.bold)), 
+            ..._tabelaIrrf.map((r) => ListTile(
+              title: Text("Até R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '').format(r['limite']).trim()}"), 
+              subtitle: Text("${r['aliquota']}% (Ded: ${NumberFormat.currency(locale: 'pt_BR', symbol: '').format(r['deducao']).trim()})"), 
+              trailing: IconButton(icon: const Icon(Icons.edit, color: Colors.blue), onPressed: () => _editarFaixaIrrf(r))
+            ))
+          ]),
           Column(
             children: [
               Padding(

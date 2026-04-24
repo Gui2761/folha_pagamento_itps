@@ -2,92 +2,68 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:folha_pagamento_itps/calculadora_taxas.dart';
 
 void main() {
-  group('CalculadoraTaxas - Lei 2026', () {
+  group('Validação Janeiro/2026 - Conforme RH', () {
     final configData = {
       'geral': {
-        'base_convenio': 210000.0,
-        'desconto_simplificado': 607.20,
+        'base_convenio': 208720.00,
       },
       'inss': [
-        {'limite': 1621.00, 'aliquota': 7.5},
-        {'limite': 2902.84, 'aliquota': 9.0},
-        {'limite': 4354.27, 'aliquota': 12.0},
-        {'limite': 8475.55, 'aliquota': 14.0},
+        {'limite': 1621.00, 'aliquota': 7.5, 'deducao': 0.0},
+        {'limite': 2902.84, 'aliquota': 9.0, 'deducao': 24.32},
+        {'limite': 4354.27, 'aliquota': 12.0, 'deducao': 111.40},
+        {'limite': 8475.55, 'aliquota': 14.0, 'deducao': 198.49},
       ],
       'irrf': [
-        {'limite': 2259.20, 'aliquota': 0.0, 'deducao': 0.0},
-        {'limite': 2826.65, 'aliquota': 7.5, 'deducao': 169.44},
-        {'limite': 3751.05, 'aliquota': 15.0, 'deducao': 381.44},
-        {'limite': 4664.68, 'aliquota': 22.5, 'deducao': 662.77},
-        {'limite': 99999999.0, 'aliquota': 27.5, 'deducao': 896.00},
+        {'limite': 2428.80, 'aliquota': 0.0, 'deducao': 0.0},
+        {'limite': 2826.65, 'aliquota': 7.5, 'deducao': 182.16},
+        {'limite': 3751.05, 'aliquota': 15.0, 'deducao': 394.16},
+        {'limite': 4664.68, 'aliquota': 22.5, 'deducao': 675.49},
+        {'limite': 99999999.0, 'aliquota': 27.5, 'deducao': 908.73},
       ]
     };
 
-    test('Isenção total para rendimentos até R\$ 5.000,00', () {
-      final resultado = CalculadoraTaxas.calcularFolha(
-        percentual: 2.0, // 210000 * 0.02 = 4200
-        valorSipes: 0.0,
-        pensao: 0.0,
-        outros: 0.0,
-        acrescimos: 0.0,
-        temInss: false,
-        temIrrf: true,
-        configData: configData,
-      );
-      
-      expect(resultado['irrf'], 0.0);
+    group('Comissionados sem SIPES (temInss:true, temIrrf:true)', () {
+      test('Adailton (1,15%) -> B=2400.28, INSS=191.71, Líq=2208.57', () {
+        final r = CalculadoraTaxas.calcularFolha(
+          percentual: 1.15, valorSipes: 0.0, pensao: 0.0, outros: 0.0, acrescimos: 0.0,
+          temInss: true, temIrrf: true, configData: configData,
+        );
+        expect(r['bruto'], 2400.28);
+        expect(r['inss'], 191.71);
+        expect(r['liquido'], 2208.57);
+      });
     });
 
-    test('Aplicação do redutor decrescente para rendimentos entre 5000 e 7350', () {
-      // Exemplo: Salário R$ 6.000,00
-      // 1. IRRF Normal: (6000 * 0.275) - 896.0 = 1650 - 896 = 754.0
-      // 2. Redução 2026: 978.62 - (0.133145 * 6000) = 978.62 - 798.87 = 179.75
-      // 3. IRRF Final: 754.0 - 179.75 = 574.25
-      
-      CalculadoraTaxas.calcularFolha(
-        percentual: 2.85714, // Aprox 6000/210000
-        valorSipes: 0.0,
-        pensao: 0.0,
-        outros: 0.0,
-        acrescimos: 0.0,
-        temInss: false,
-        temIrrf: true,
-        configData: configData,
-      );
-      
-      // Ajustando percentual para dar exatamente 6000
-      final resultadoExato = CalculadoraTaxas.calcularFolha(
-        percentual: (6000 / 210000) * 100,
-        valorSipes: 0.0,
-        pensao: 0.0,
-        outros: 0.0,
-        acrescimos: 0.0,
-        temInss: false,
-        temIrrf: true,
-        configData: configData,
-      );
+    group('Comissionados com SIPES - só INSS (temIrrf:false)', () {
+      test('Maianne Mirelle (1,10% | SIPES=1883.40) -> INSS=244.93, Líq=2050.99', () {
+        final r = CalculadoraTaxas.calcularFolha(
+          percentual: 1.10, valorSipes: 1883.40, pensao: 0.0, outros: 0.0, acrescimos: 0.0,
+          temInss: true, temIrrf: false, configData: configData,
+        );
+        expect(r['bruto'], 2295.92);
+        expect(r['inss'], 244.93);
+        expect(r['liquido'], 2050.99);
+      });
 
-      expect(resultadoExato['bruto'], 6000.0);
-      expect(resultadoExato['irrf'], 407.27);
+      test('Carlos André (0,80% | sem SIPES) -> INSS=125.96, Líq=1543.80', () {
+        final r = CalculadoraTaxas.calcularFolha(
+          percentual: 0.80, valorSipes: 0.0, pensao: 0.0, outros: 0.0, acrescimos: 0.0,
+          temInss: true, temIrrf: false, configData: configData,
+        );
+        expect(r['inss'], 125.96);
+        expect(r['liquido'], 1543.80);
+      });
     });
 
-    test('Cálculo normal para rendimentos acima de R\$ 7.350,00', () {
-      // Exemplo: Salário R$ 8.000,00
-      // IRRF Normal: (8000 * 0.275) - 896.0 = 2200 - 896 = 1304.0
-      
-      final resultado = CalculadoraTaxas.calcularFolha(
-        percentual: (8000 / 210000) * 100,
-        valorSipes: 0.0,
-        pensao: 0.0,
-        outros: 0.0,
-        acrescimos: 0.0,
-        temInss: false,
-        temIrrf: true,
-        configData: configData,
-      );
-
-      expect(resultado['bruto'], 8000.0);
-      expect(resultado['irrf'], 1137.02);
+    group('Cedidos Estaduais (Antonio Carlos)', () {
+      test('Antonio Carlos (2,5% | SIPES=22451.02) -> IRRF=1434.95, Líq=3783.05', () {
+        final r = CalculadoraTaxas.calcularFolha(
+          percentual: 2.5, valorSipes: 22451.02, pensao: 0.0, outros: 0.0, acrescimos: 0.0,
+          temInss: false, temIrrf: true, configData: configData,
+        );
+        expect(r['irrf'], 1434.95);
+        expect(r['liquido'], 3783.05);
+      });
     });
   });
 }
