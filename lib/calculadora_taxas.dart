@@ -75,21 +75,17 @@ class CalculadoraTaxas {
   }
 
   static double _calcularInssProgressivo(double salario, List<Map<String, dynamic>> tabela) {
-    double imposto = 0.0;
     tabela.sort((a, b) => (a['limite'] as num).compareTo(b['limite'] as num));
-    double limiteAnterior = 0.0;
     for (var faixa in tabela) {
-      double limite = faixa['limite'];
-      double aliquota = faixa['aliquota'];
-      if (salario > limite) {
-        imposto += (limite - limiteAnterior) * (aliquota / 100);
-      } else {
-        imposto += (salario - limiteAnterior) * (aliquota / 100);
-        return imposto;
+      if (salario <= faixa['limite']) {
+        return max(0, (salario * (faixa['aliquota'] / 100)) - (faixa['deducao'] ?? 0.0));
       }
-      limiteAnterior = limite;
     }
-    return imposto;
+    if (tabela.isNotEmpty) {
+      var ultima = tabela.last;
+      return max(0, (ultima['limite'] * (ultima['aliquota'] / 100)) - (ultima['deducao'] ?? 0.0));
+    }
+    return 0.0;
   }
 
   static double _calcularIrrf(double base, List<Map<String, dynamic>> tabela) {
