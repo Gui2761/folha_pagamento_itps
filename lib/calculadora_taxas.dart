@@ -15,6 +15,8 @@ class CalculadoraTaxas {
     required bool temInss,
     required bool temIrrf,
     required Map<String, dynamic> configData,
+    double irrfSipesReal = 0.0,
+    double irrfManual = 0.0,
   }) {
     final Map<String, double> geral =
         Map<String, double>.from(configData['geral'] ?? {});
@@ -81,14 +83,22 @@ class CalculadoraTaxas {
       irrfTotalGlobal =
           baseIrrf > 0 ? _calcularIrrf(baseIrrf, tabelaIrrf) : 0.0;
 
-      // 5.2 Cálculo do IRRF já pago no SIPES
-      // (Base do SIPES para IRRF = Vencimento SIPES - INSS sobre SIPES - Pensão)
-      double baseSipesIrrf = _arredondar(valorSipes - inssSobreSipes - pensao);
-      irrfSobreSipes =
-          baseSipesIrrf > 0 ? _calcularIrrf(baseSipesIrrf, tabelaIrrf) : 0.0;
-
-      // 5.3 IRRF a Descontar nesta Folha = IRRF Total - IRRF já pago no SIPES
-      irffADescontar = max(0, irrfTotalGlobal - irrfSobreSipes);
+      // 5.2 Cálculo do IRRF e Encontro de Contas
+      if (irrfManual > 0) {
+        // O usuário informou exatamente o valor final a ser descontado
+        irffADescontar = irrfManual;
+        irrfSobreSipes = max(0, irrfTotalGlobal - irffADescontar); 
+      } else if (irrfSipesReal > 0) {
+        // (Legado) Valor real informado pelo RH (do contracheque do SIPES)
+        irrfSobreSipes = irrfSipesReal;
+        irffADescontar = max(0, irrfTotalGlobal - irrfSobreSipes);
+      } else {
+        // Cálculo automático: Base do SIPES para IRRF = Vencimento SIPES - INSS sobre SIPES - Pensão
+        double baseSipesIrrf = _arredondar(valorSipes - inssSobreSipes - pensao);
+        irrfSobreSipes =
+            baseSipesIrrf > 0 ? _calcularIrrf(baseSipesIrrf, tabelaIrrf) : 0.0;
+        irffADescontar = max(0, irrfTotalGlobal - irrfSobreSipes);
+      }
     }
 
     // ========================================================================
@@ -109,6 +119,7 @@ class CalculadoraTaxas {
       'irrf': _arredondar(irffADescontar),
       'irrf_total': _arredondar(irrfTotalGlobal),
       'irrf_sipes': _arredondar(irrfSobreSipes),
+      'irrf_manual_informado': irrfManual > 0,
       'pensao': _arredondar(pensao),
       'outros': _arredondar(outros),
       'acrescimos': _arredondar(acrescimos),

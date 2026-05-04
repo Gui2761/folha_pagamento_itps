@@ -89,6 +89,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _pensaoCtrl = TextEditingController();
   final _outrosCtrl = TextEditingController();
   final _acrescimosCtrl = TextEditingController();
+  final _irrfManualCtrl = TextEditingController();
 
   // Scrolls
   final ScrollController _horizontalScroll = ScrollController();
@@ -143,6 +144,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'acrescimos': _parseMoeda(_acrescimosCtrl.text),
         'tem_inss': _temInss ? 1 : 0,
         'tem_irrf': _temIrrf ? 1 : 0,
+        'irrf_manual': _parseMoeda(_irrfManualCtrl.text),
       };
 
       if (_editingId == null) {
@@ -178,6 +180,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _pensaoCtrl.text = _formatMoeda(f['pensao'] ?? 0.0);
       _outrosCtrl.text = _formatMoeda(f['outros'] ?? 0.0);
       _acrescimosCtrl.text = _formatMoeda(f['acrescimos'] ?? 0.0);
+      _irrfManualCtrl.text = _formatMoeda(f['irrf_manual'] ?? 0.0);
       _temInss = f['tem_inss'] == 1;
       _temIrrf = f['tem_irrf'] == 1;
       _selectedCargoId = null;
@@ -198,6 +201,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _pensaoCtrl.clear();
     _outrosCtrl.clear();
     _acrescimosCtrl.clear();
+    _irrfManualCtrl.clear();
     setState(() {
       _editingId = null;
       _selectedCargoId = null;
@@ -416,6 +420,8 @@ class _HomeScreenState extends State<HomeScreen> {
             temInss: f['tem_inss'] == 1,
             temIrrf: f['tem_irrf'] == 1,
             configData: _configData!,
+            irrfManual: f['irrf_manual'] ?? 0.0,
+            irrfSipesReal: f['irrf_sipes_real'] ?? 0.0, // fallback
           );
           sheetCat.appendRow([
             excel_pkg.TextCellValue(f['nome']),
@@ -476,6 +482,8 @@ class _HomeScreenState extends State<HomeScreen> {
           temInss: f['tem_inss'] == 1,
           temIrrf: f['tem_irrf'] == 1,
           configData: _configData!,
+          irrfManual: f['irrf_manual'] ?? 0.0,
+          irrfSipesReal: f['irrf_sipes_real'] ?? 0.0, // fallback
         );
         tBruto += calc['bruto'] ?? 0.0;
         tInss += calc['inss'] ?? 0.0;
@@ -652,55 +660,178 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _mostrarDetalhesCalculo(String nome, Map<String, dynamic> calc) {
+    // Extraindo valores para facilitar o uso
+    double sipes = calc['sipes'] ?? 0.0;
+    double convenio = calc['base_convenio'] ?? 0.0;
+    double global = calc['base_global_bruta'] ?? 0.0;
+
     double inssTotal = calc['inss_total'] ?? 0.0;
     double inssSipes = calc['inss_sipes'] ?? 0.0;
     double inssFinal = calc['inss'] ?? 0.0;
 
+    double baseIrrf = calc['base_irrf'] ?? 0.0;
     double irrfTotal = calc['irrf_total'] ?? 0.0;
     double irrfSipes = calc['irrf_sipes'] ?? 0.0;
     double irrfFinal = calc['irrf'] ?? 0.0;
+    bool irrfManualInformado = calc['irrf_manual_informado'] ?? false;
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text("Cálculo Detalhado: $nome"),
-        content: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text("INSS (Encontro de Contas)",
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold, color: Colors.blue)),
-              const SizedBox(height: 5),
-              Text("INSS do Convênio (Bruto): ${_formatMoeda(inssTotal)}"),
-              Text("(-) INSS do Sipes (Estado): ${_formatMoeda(inssSipes)}"),
-              const Divider(),
-              Text("= INSS a Pagar: ${_formatMoeda(inssFinal)}",
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 20),
-              const Text("IRRF (Encontro de Contas)",
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold, color: Colors.red)),
-              const SizedBox(height: 5),
-              Text("IRRF do Convênio (Bruto): ${_formatMoeda(irrfTotal)}"),
-              Text("(-) IRRF do Sipes (Estado): ${_formatMoeda(irrfSipes)}"),
-              const Divider(),
-              Text("= IRRF a Pagar: ${_formatMoeda(irrfFinal)}",
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 20),
-              const Text("* Sincronizado com os parâmetros do RH.",
-                  style: TextStyle(
-                      fontSize: 11,
-                      fontStyle: FontStyle.italic,
-                      color: Colors.grey)),
-            ],
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.analytics_outlined, color: Color(0xFF0D47A1)),
+            const SizedBox(width: 10),
+            Expanded(child: Text("Memória de Cálculo: $nome")),
+          ],
+        ),
+        content: SizedBox(
+          width: 500,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildDestaqueValores("Base Bruta Global", global,
+                    "Soma: ${_formatMoeda(sipes)} (SIPES) + ${_formatMoeda(convenio)} (Convênio)"),
+                const SizedBox(height: 20),
+                
+                // SEÇÃO INSS
+                _buildHeaderSecao("INSS - Previdência", Icons.security, Colors.blue),
+                _buildItemCalculo("INSS Total (sobre Global)", inssTotal),
+                _buildItemCalculo("(-) INSS já pago no SIPES", inssSipes, isDeducao: true),
+                const Divider(),
+                _buildItemResultado("INSS a descontar nesta folha", inssFinal, Colors.blue),
+                
+                const SizedBox(height: 24),
+                
+                // SEÇÃO IRRF
+                _buildHeaderSecao("IRRF - Imposto de Renda", Icons.request_quote, Colors.red),
+                _buildItemCalculo("Base de Cálculo IRRF", baseIrrf, info: "Bruto - INSS Total - Pensão"),
+                _buildItemCalculo("IRRF Total (sobre Base Global)", irrfTotal),
+                _buildItemCalculo(
+                  "(-) IRRF já pago no SIPES", 
+                  irrfSipes, 
+                  isDeducao: true,
+                  info: irrfManualInformado ? "Diferença inferida a partir do valor manual" : "Valor calculado"
+                ),
+                const Divider(),
+                _buildItemResultado(
+                  "IRRF a descontar nesta folha", 
+                  irrfFinal, 
+                  irrfManualInformado ? Colors.orange : Colors.red,
+                  info: irrfManualInformado ? "Valor digitado manualmente no formulário" : null
+                ),
+
+                const SizedBox(height: 24),
+                
+                // RESUMO LÍQUIDO
+                _buildHeaderSecao("Líquido do Convênio", Icons.wallet, Colors.green),
+                _buildItemCalculo("Valor Bruto do Convênio", convenio),
+                _buildItemCalculo("(-) INSS a descontar", inssFinal, isDeducao: true),
+                _buildItemCalculo("(-) IRRF a descontar", irrfFinal, isDeducao: true),
+                _buildItemCalculo("(-) Pensão/Outros", (calc['pensao'] ?? 0) + (calc['outros'] ?? 0), isDeducao: true),
+                _buildItemCalculo("(+) Acréscimos", calc['acrescimos'] ?? 0),
+                const Divider(thickness: 2),
+                _buildItemResultado("VALOR LÍQUIDO A RECEBER", calc['liquido'] ?? 0.0, Colors.green[800]!),
+                
+                const SizedBox(height: 16),
+                const Center(
+                  child: Text(
+                    "* Valores sincronizados com a tabela 2026 do Excel.",
+                    style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.grey),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text("Fechar"))
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("FECHAR", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _buildDestaqueValores(String label, double valor, String sub) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(_formatMoeda(valor), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black)),
+          const SizedBox(height: 4),
+          Text(sub, style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeaderSecao(String title, IconData icon, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 8),
+          Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildItemCalculo(String label, double valor, {bool isDeducao = false, String? info}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label, style: const TextStyle(fontSize: 13, color: Colors.black87)),
+              Text(
+                "${isDeducao ? '-' : ''} ${_formatMoeda(valor)}",
+                style: TextStyle(
+                  fontSize: 13, 
+                  color: isDeducao ? Colors.red[700] : Colors.black,
+                  fontFamily: 'monospace'
+                ),
+              ),
+            ],
+          ),
+          if (info != null)
+            Text(info, style: const TextStyle(fontSize: 10, color: Colors.grey, fontStyle: FontStyle.italic)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildItemResultado(String label, double valor, Color color, {String? info}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+            Text(_formatMoeda(valor), style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: color)),
+          ],
+        ),
+        if (info != null)
+          Text(info, style: const TextStyle(fontSize: 10, color: Colors.grey, fontStyle: FontStyle.italic)),
+      ]
     );
   }
 
@@ -726,6 +857,8 @@ class _HomeScreenState extends State<HomeScreen> {
         temInss: f['tem_inss'] == 1,
         temIrrf: f['tem_irrf'] == 1,
         configData: _configData!,
+        irrfManual: f['irrf_manual'] ?? 0.0,
+        irrfSipesReal: f['irrf_sipes_real'] ?? 0.0, // fallback
       );
 
       totalBrutoGeral += calc['bruto'] ?? 0.0;
@@ -1108,7 +1241,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                         .numberWithOptions(
                                                         decimal: true),
                                                 inputFormatters: [
-                                                  DecimalInputFormatter()
+                                                  CurrencyInputFormatter()
                                                 ],
                                                 decoration:
                                                     const InputDecoration(
@@ -1117,6 +1250,22 @@ class _HomeScreenState extends State<HomeScreen> {
                                                             Icons.money_off)))),
                                       ],
                                     ),
+                                    const SizedBox(height: 12),
+                                    TextFormField(
+                                        controller: _irrfManualCtrl,
+                                        keyboardType:
+                                            const TextInputType
+                                                .numberWithOptions(
+                                                decimal: true),
+                                        inputFormatters: [
+                                          CurrencyInputFormatter()
+                                        ],
+                                        decoration:
+                                            const InputDecoration(
+                                                labelText: "IRRF a Descontar (Manual)",
+                                                helperText: "Ex: 200,16. Deixe vazio para cálculo automático.",
+                                                prefixIcon: Icon(
+                                                    Icons.request_quote, color: Colors.orange))),
                                     const SizedBox(height: 12),
                                     Row(
                                       children: [
@@ -1128,7 +1277,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                         .numberWithOptions(
                                                         decimal: true),
                                                 inputFormatters: [
-                                                  DecimalInputFormatter()
+                                                  CurrencyInputFormatter()
                                                 ],
                                                 decoration:
                                                     const InputDecoration(
@@ -1142,7 +1291,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                         .numberWithOptions(
                                                         decimal: true),
                                                 inputFormatters: [
-                                                  DecimalInputFormatter()
+                                                  CurrencyInputFormatter()
                                                 ],
                                                 decoration:
                                                     const InputDecoration(
@@ -1155,7 +1304,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         keyboardType: const TextInputType
                                             .numberWithOptions(decimal: true),
                                         inputFormatters: [
-                                          DecimalInputFormatter()
+                                          CurrencyInputFormatter()
                                         ],
                                         decoration: const InputDecoration(
                                             labelText:
@@ -1789,6 +1938,35 @@ class _ConfigScreenState extends State<ConfigScreen>
     widget.onSave();
   }
 
+  Future<void> _resetarTabelas() async {
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Resetar Tabelas?"),
+        content: const Text(
+            "Isso irá substituir todas as faixas de INSS e IRRF pelos valores oficiais de 2026. Deseja continuar?"),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text("Cancelar")),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text("Resetar", style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+
+    if (confirmar == true) {
+      await DatabaseHelper.instance.resetTabelasFiscais();
+      _carregarDados();
+      widget.onSave();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Tabelas resetadas com sucesso!")));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoadingConfig) {
@@ -1830,92 +2008,385 @@ class _ConfigScreenState extends State<ConfigScreen>
     }
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-          title: const Text("Configurações"),
-          bottom: TabBar(controller: _tabController, tabs: const [
-            Tab(text: "Geral"),
-            Tab(text: "Tabelas"),
-            Tab(text: "Cargos")
-          ])),
-      body: TabBarView(controller: _tabController, children: [
-        ListView(padding: const EdgeInsets.all(20), children: [
-          const Text("Valores Base",
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          const SizedBox(height: 10),
-          TextField(
-              controller: _baseCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [DecimalInputFormatter()],
-              decoration: const InputDecoration(
-                  labelText: "Base Convênio (R\$)",
-                  border: OutlineInputBorder())),
-          const SizedBox(height: 10),
-          TextField(
-              controller: _patronalCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [DecimalInputFormatter()],
-              decoration: const InputDecoration(
-                  labelText: "Patronal (%)", border: OutlineInputBorder())),
-          const SizedBox(height: 20),
-          ElevatedButton(onPressed: _salvarGeral, child: const Text("SALVAR"))
-        ]),
-        ListView(padding: const EdgeInsets.all(20), children: [
-          const Text("Tabela INSS",
-              style: TextStyle(fontWeight: FontWeight.bold)),
-          ..._tabelaInss.map((r) => ListTile(
-              title: Text(
-                  "Até R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '').format(r['limite']).trim()}"),
-              subtitle: Text(
-                  "${r['aliquota']}% (Ded: ${NumberFormat.currency(locale: 'pt_BR', symbol: '').format(r['deducao'] ?? 0.0).trim()})"),
-              trailing: IconButton(
-                  icon: const Icon(Icons.edit, color: Colors.blue),
-                  onPressed: () => _editarFaixaInss(r)))),
-          const Divider(),
-          const Text("Tabela IRRF",
-              style: TextStyle(fontWeight: FontWeight.bold)),
-          ..._tabelaIrrf.map((r) => ListTile(
-              title: Text(
-                  "Até R\$ ${NumberFormat.currency(locale: 'pt_BR', symbol: '').format(r['limite']).trim()}"),
-              subtitle: Text(
-                  "${r['aliquota']}% (Ded: ${NumberFormat.currency(locale: 'pt_BR', symbol: '').format(r['deducao']).trim()})"),
-              trailing: IconButton(
-                  icon: const Icon(Icons.edit, color: Colors.blue),
-                  onPressed: () => _editarFaixaIrrf(r))))
-        ]),
-        Column(children: [
-          Padding(
-              padding: const EdgeInsets.all(10.0),
-              child: ElevatedButton.icon(
-                  onPressed: () => _abrirDialogoCargo(),
-                  icon: const Icon(Icons.add),
-                  label: const Text("Novo Cargo"))),
-          Expanded(
-              child: ListView.builder(
+        title: const Text("Configurações",
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: const Color(0xFF0D47A1),
+          indicatorSize: TabBarIndicatorSize.label,
+          labelColor: const Color(0xFF0D47A1),
+          unselectedLabelColor: Colors.grey[600],
+          labelStyle: const TextStyle(fontWeight: FontWeight.bold),
+          tabs: const [
+            Tab(text: "Geral", icon: Icon(Icons.settings_outlined)),
+            Tab(text: "Tabelas", icon: Icon(Icons.table_chart_outlined)),
+            Tab(text: "Cargos", icon: Icon(Icons.badge_outlined)),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildGeralTab(),
+          _buildTabelasTab(),
+          _buildCargosTab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGeralTab() {
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: Colors.grey.shade200)),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.account_balance_wallet_outlined,
+                        color: Colors.blue[800]),
+                    const SizedBox(width: 12),
+                    const Text("Valores Base do Sistema",
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 18)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Configure os parâmetros globais para o cálculo da folha.",
+                  style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Divider(),
+                ),
+                TextField(
+                  controller: _baseCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [DecimalInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: "Base Convênio (R\$)",
+                    prefixIcon: Icon(Icons.money),
+                    hintText: "0,00",
+                  ),
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: _patronalCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [DecimalInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: "Patronal (%)",
+                    prefixIcon: Icon(Icons.percent),
+                    hintText: "0,00",
+                  ),
+                ),
+                const SizedBox(height: 32),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton.icon(
+                    onPressed: _salvarGeral,
+                    icon: const Icon(Icons.save_outlined),
+                    label: const Text("SALVAR CONFIGURAÇÕES",
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0D47A1),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTabelasTab() {
+    return LayoutBuilder(builder: (context, constraints) {
+      bool isWide = constraints.maxWidth > 900;
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text("Parâmetros Fiscais",
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 18)),
+                      Text("Valores sincronizados com a tabela oficial de 2026.",
+                          style:
+                              TextStyle(color: Colors.grey[600], fontSize: 14)),
+                    ],
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _resetarTabelas,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text("RESETAR PARA 2026"),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red[700],
+                    side: BorderSide(color: Colors.red.shade200),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            isWide
+                ? Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                          child: _buildTableCard("Tabela INSS", _tabelaInss, true)),
+                      const SizedBox(width: 24),
+                      Expanded(
+                          child: _buildTableCard("Tabela IRRF", _tabelaIrrf, false)),
+                    ],
+                  )
+                : Column(
+                    children: [
+                      _buildTableCard("Tabela INSS", _tabelaInss, true),
+                      const SizedBox(height: 16),
+                      _buildTableCard("Tabela IRRF", _tabelaIrrf, false),
+                    ],
+                  ),
+          ],
+        ),
+      );
+    });
+  }
+
+  Widget _buildTableCard(
+      String title, List<Map<String, dynamic>> data, bool isInss) {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.grey.shade200)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey[50],
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Row(
+              children: [
+                Icon(isInss ? Icons.security : Icons.request_quote,
+                    color: isInss ? Colors.green[700] : Colors.red[700],
+                    size: 20),
+                const SizedBox(width: 10),
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 16)),
+                const Spacer(),
+                Text("${data.length} faixas",
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          if (data.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(32),
+              child: Center(
+                  child: Text("Nenhuma faixa cadastrada",
+                      style: TextStyle(color: Colors.grey))),
+            )
+          else
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: data.length,
+              separatorBuilder: (context, index) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final r = data[index];
+                return ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  title: Text(
+                    "Até ${_formatMoeda(r['limite'])}",
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 14),
+                  ),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.blue[50],
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            "${r['aliquota']}%",
+                            style: TextStyle(
+                                color: Colors.blue[900],
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          "Dedução: ${_formatMoeda(r['deducao'] ?? 0.0)}",
+                          style:
+                              TextStyle(color: Colors.grey[600], fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  trailing: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.edit_note, size: 22),
+                      color: const Color(0xFF0D47A1),
+                      onPressed: () =>
+                          isInss ? _editarFaixaInss(r) : _editarFaixaIrrf(r),
+                      tooltip: "Editar Faixa",
+                    ),
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCargosTab() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text("Gestão de Cargos",
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 18)),
+                    Text("Gerencie os cargos e seus percentuais padrão.",
+                        style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+                  ],
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: () => _abrirDialogoCargo(),
+                icon: const Icon(Icons.add),
+                label: const Text("NOVO CARGO"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green[700],
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: _cargosLocais.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.badge_outlined,
+                          size: 64, color: Colors.grey[300]),
+                      const SizedBox(height: 16),
+                      const Text("Nenhum cargo cadastrado",
+                          style: TextStyle(color: Colors.grey, fontSize: 16)),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   itemCount: _cargosLocais.length,
                   itemBuilder: (ctx, i) {
                     final c = _cargosLocais[i];
-                    return ListTile(
-                        title: Text(c['nome']),
+                    return Card(
+                      elevation: 0,
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(color: Colors.grey.shade200)),
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 8),
+                        leading: CircleAvatar(
+                          backgroundColor: Colors.blue[50],
+                          child: Icon(Icons.work_outline,
+                              color: Colors.blue[800], size: 20),
+                        ),
+                        title: Text(c['nome'],
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold)),
                         subtitle: Text(
-                            "${c['locacao'] ?? 'Sem setor'} - ${c['percentual_padrao']}%"),
+                          "${c['locacao'] ?? 'Sem setor'} • ${c['percentual_padrao']}%",
+                          style: TextStyle(color: Colors.grey[600]),
+                        ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
                                 icon:
-                                    const Icon(Icons.edit, color: Colors.blue),
-                                onPressed: () => _abrirDialogoCargo(cargo: c)),
+                                    const Icon(Icons.edit_note, size: 24),
+                                color: Colors.blue[700],
+                                onPressed: () => _abrirDialogoCargo(cargo: c),
+                                tooltip: "Editar"),
                             IconButton(
                                 icon:
-                                    const Icon(Icons.delete, color: Colors.red),
-                                onPressed: () => _deletarCargo(c['id'])),
+                                    const Icon(Icons.delete_outline, size: 24),
+                                color: Colors.red[400],
+                                onPressed: () => _deletarCargo(c['id']),
+                                tooltip: "Excluir"),
                           ],
-                        ));
-                  }))
-        ])
-      ]),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
     );
   }
 }

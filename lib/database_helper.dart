@@ -11,7 +11,6 @@ class DatabaseHelper {
 
   Future<Database> get database async {
     if (_database != null) return _database!;
-    // Atualizado para forçar a reconstrução com a tabela idêntica à do RH
     _database = await _initDB('folha_itps_v8_rh_sync.db'); 
     return _database!;
   }
@@ -26,19 +25,19 @@ class DatabaseHelper {
       return await databaseFactory.openDatabase(
         path,
         options: OpenDatabaseOptions(
-          version: 1,
+          version: 3,
           onCreate: _onCreate,
+          onUpgrade: _onUpgrade,
         ),
       );
     } else {
       final dbPath = await getDatabasesPath();
       path = join(dbPath, filePath);
-      return await openDatabase(path, version: 1, onCreate: _onCreate);
+      return await openDatabase(path, version: 3, onCreate: _onCreate, onUpgrade: _onUpgrade);
     }
   }
 
   Future _onCreate(Database db, int version) async {
-    // 1. Tabela Funcionários
     await db.execute('''
       CREATE TABLE funcionarios (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,11 +56,12 @@ class DatabaseHelper {
         outros REAL,
         acrescimos REAL,
         tem_inss INTEGER,
-        tem_irrf INTEGER
+        tem_irrf INTEGER,
+        irrf_sipes_real REAL DEFAULT 0.0,
+        irrf_manual REAL DEFAULT 0.0
       )
     ''');
 
-    // 2. Tabela Cargos
     await db.execute('''
       CREATE TABLE cargos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,14 +71,10 @@ class DatabaseHelper {
       )
     ''');
     
-    // 3. Configurações e Tabelas Fiscais
     await db.execute('CREATE TABLE config_geral (chave TEXT PRIMARY KEY, valor REAL)');
     await db.execute('CREATE TABLE config_inss (id INTEGER PRIMARY KEY AUTOINCREMENT, limite REAL, aliquota REAL, deducao REAL)');
     await db.execute('CREATE TABLE config_irrf (id INTEGER PRIMARY KEY AUTOINCREMENT, limite REAL, aliquota REAL, deducao REAL)');
 
-    // ============================================================
-    //        LISTA COMPLETA DE CARGOS (ORDEM ALFABÉTICA)
-    // ============================================================
     await db.execute("INSERT INTO cargos (nome, locacao, percentual_padrao) VALUES ('Agente Administrativo', 'Doc. e Inspeção', 0.75)");
     await db.execute("INSERT INTO cargos (nome, locacao, percentual_padrao) VALUES ('Agente Administrativo', 'Ger. Executiva', 0.41)");
     await db.execute("INSERT INTO cargos (nome, locacao, percentual_padrao) VALUES ('Agente Administrativo', 'Metrologia Legal', 1.15)");
@@ -162,21 +158,16 @@ class DatabaseHelper {
     await db.execute("INSERT INTO cargos (nome, locacao, percentual_padrao) VALUES ('Telefonista', 'Prod. Pré Medidos', 0.75)");
     await db.execute("INSERT INTO cargos (nome, locacao, percentual_padrao) VALUES ('Telefonista', 'Serviços Gerais', 0.41)");
 
-    // ============================================================
-    //        CONFIGURAÇÕES E TABELAS FISCAIS SINCRONIZADAS (RH)
-    // ============================================================
-    await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('base_convenio', 210000.00)");
+    await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('base_convenio', 230680.00)");
     await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('aliquota_patronal', 9.02)");
     await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('teto_inss', 8475.55)"); 
     await db.execute("INSERT INTO config_geral (chave, valor) VALUES ('desconto_simplificado', 607.20)");
 
-    // TABELA INSS 2026 (SALÁRIO MÍNIMO R$ 1.621,00)
     await db.execute("INSERT INTO config_inss (limite, aliquota, deducao) VALUES (1621.00, 7.5, 0.0)");
     await db.execute("INSERT INTO config_inss (limite, aliquota, deducao) VALUES (2902.84, 9.0, 24.32)");
     await db.execute("INSERT INTO config_inss (limite, aliquota, deducao) VALUES (4354.27, 12.0, 111.40)");
     await db.execute("INSERT INTO config_inss (limite, aliquota, deducao) VALUES (8475.55, 14.0, 198.49)");
 
-    // TABELA IRRF 2026 (VALORES OFICIAIS PLANILHA RH)
     await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (2428.80, 0.0, 0.0)");
     await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (2826.65, 7.5, 182.16)"); 
     await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (3751.05, 15.0, 394.16)");
@@ -184,7 +175,6 @@ class DatabaseHelper {
     await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (999999999.00, 27.5, 908.73)");
   }
 
-  // === CRUD FUNCIONÁRIOS ===
   Future<int> createFuncionario(Map<String, dynamic> row) async {
     final db = await instance.database;
     return await db.insert('funcionarios', row);
@@ -192,7 +182,6 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> readFuncionarios() async {
     final db = await instance.database;
-    // Garante que a lista seja devolvida em ORDEM ALFABÉTICA
     return await db.query('funcionarios', orderBy: 'nome ASC');
   }
 
@@ -207,7 +196,6 @@ class DatabaseHelper {
     return await db.delete('funcionarios', where: 'id = ?', whereArgs: [id]);
   }
 
-  // === CRUD CARGOS ===
   Future<int> createCargo(Map<String, dynamic> row) async {
     final db = await instance.database;
     return await db.insert('cargos', row);
@@ -215,11 +203,9 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> readCargos() async {
     final db = await instance.database;
-    // Garante a ordem alfabética ao carregar a lista
     return await db.query('cargos', orderBy: 'nome ASC');
   }
 
-  // Adicione esta função para permitir a edição do cargo
   Future<int> updateCargo(Map<String, dynamic> row) async {
     final db = await instance.database;
     int id = row['id'];
@@ -231,7 +217,6 @@ class DatabaseHelper {
     return await db.delete('cargos', where: 'id = ?', whereArgs: [id]);
   }
 
-  // === CONFIGURAÇÕES ===
   Future<Map<String, dynamic>> loadFullConfig() async {
     final db = await instance.database;
     try {
@@ -265,5 +250,42 @@ class DatabaseHelper {
   Future<void> updateTabelaIrrf(int id, double limite, double aliquota, double deducao) async {
     final db = await instance.database;
     await db.update('config_irrf', {'limite': limite, 'aliquota': aliquota, 'deducao': deducao}, where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Adicionar coluna irrf_sipes_real para bancos existentes
+      try {
+        await db.execute('ALTER TABLE funcionarios ADD COLUMN irrf_sipes_real REAL DEFAULT 0.0');
+      } catch (_) {
+        // Coluna já existe, ignorar
+      }
+    }
+    if (oldVersion < 3) {
+      try {
+        await db.execute('ALTER TABLE funcionarios ADD COLUMN irrf_manual REAL DEFAULT 0.0');
+      } catch (_) {
+        // Coluna já existe, ignorar
+      }
+    }
+  }
+
+  Future<void> resetTabelasFiscais() async {
+    final db = await instance.database;
+    await db.transaction((txn) async {
+      await txn.delete('config_inss');
+      await txn.delete('config_irrf');
+
+      await txn.insert('config_inss', {'limite': 1621.00, 'aliquota': 7.5, 'deducao': 0.0});
+      await txn.insert('config_inss', {'limite': 2902.84, 'aliquota': 9.0, 'deducao': 24.32});
+      await txn.insert('config_inss', {'limite': 4354.27, 'aliquota': 12.0, 'deducao': 111.40});
+      await txn.insert('config_inss', {'limite': 8475.55, 'aliquota': 14.0, 'deducao': 198.49});
+
+      await txn.insert('config_irrf', {'limite': 2428.80, 'aliquota': 0.0, 'deducao': 0.0});
+      await txn.insert('config_irrf', {'limite': 2826.65, 'aliquota': 7.5, 'deducao': 182.16});
+      await txn.insert('config_irrf', {'limite': 3751.05, 'aliquota': 15.0, 'deducao': 394.16});
+      await txn.insert('config_irrf', {'limite': 4664.68, 'aliquota': 22.5, 'deducao': 675.49});
+      await txn.insert('config_irrf', {'limite': 999999999.00, 'aliquota': 27.5, 'deducao': 908.73});
+    });
   }
 }
