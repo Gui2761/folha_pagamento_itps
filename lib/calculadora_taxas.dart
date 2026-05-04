@@ -77,11 +77,33 @@ class CalculadoraTaxas {
     double irrfTotalGlobal = 0.0;
     double irrfSobreSipes = 0.0;
     double irffADescontar = 0.0;
+    
+    double redutorIrrf = 0.0;
+    bool isentoIrrf2026 = false;
 
     if (temIrrf) {
-      // 5.1 Cálculo do IRRF Total sobre a Base do IRRF
-      irrfTotalGlobal =
-          baseIrrf > 0 ? _calcularIrrf(baseIrrf, tabelaIrrf) : 0.0;
+      // 5.1 Cálculo do IRRF Total (Regra 2026)
+      if (baseGlobalBruta <= 5000.00) {
+        irrfTotalGlobal = 0.0;
+        isentoIrrf2026 = true;
+      } else {
+        // Para bater com o Excel do cliente:
+        // A base para o cálculo do IRRF 2026 (Bruto > 5000) utiliza:
+        // Bruto Global - INSS SIPES (ignora o INSS Convênio no cálculo da base para este redutor)
+        // E aplica a alíquota única de 27,5% com dedução de 908,73.
+        
+        // inssSobreSipes foi calculado no Passo 3.2
+        double baseCalculoExcel = baseGlobalBruta - inssSobreSipes - pensao;
+        
+        double irrfTradicional = (baseCalculoExcel * 0.275) - 908.73;
+        
+        if (baseGlobalBruta <= 7350.00) {
+          redutorIrrf = max(0.0, 978.62 - (0.133145 * baseGlobalBruta));
+          irrfTotalGlobal = _arredondar(max(0.0, irrfTradicional - redutorIrrf));
+        } else {
+          irrfTotalGlobal = _arredondar(irrfTradicional);
+        }
+      }
 
       // 5.2 Cálculo do IRRF e Encontro de Contas
       if (irrfManual > 0) {
@@ -93,10 +115,22 @@ class CalculadoraTaxas {
         irrfSobreSipes = irrfSipesReal;
         irffADescontar = max(0, irrfTotalGlobal - irrfSobreSipes);
       } else {
-        // Cálculo automático: Base do SIPES para IRRF = Vencimento SIPES - INSS sobre SIPES - Pensão
-        double baseSipesIrrf = _arredondar(valorSipes - inssSobreSipes - pensao);
-        irrfSobreSipes =
-            baseSipesIrrf > 0 ? _calcularIrrf(baseSipesIrrf, tabelaIrrf) : 0.0;
+        // Cálculo automático para o SIPES usando Regra 2026
+        if (valorSipes <= 5000.00) {
+          irrfSobreSipes = 0.0;
+        } else {
+          // Segue a mesma lógica do cálculo global para consistência
+          double baseSipesIrrf = valorSipes - inssSobreSipes - pensao;
+          double irrfTradicionalSipes = (baseSipesIrrf * 0.275) - 908.73;
+          
+          if (valorSipes <= 7350.00) {
+            double redutorSipes = max(0.0, 978.62 - (0.133145 * valorSipes));
+            irrfSobreSipes = _arredondar(max(0.0, irrfTradicionalSipes - redutorSipes));
+          } else {
+            irrfSobreSipes = _arredondar(irrfTradicionalSipes);
+          }
+        }
+        
         irffADescontar = max(0, irrfTotalGlobal - irrfSobreSipes);
       }
     }
@@ -120,6 +154,8 @@ class CalculadoraTaxas {
       'irrf_total': _arredondar(irrfTotalGlobal),
       'irrf_sipes': _arredondar(irrfSobreSipes),
       'irrf_manual_informado': irrfManual > 0,
+      'redutor_irrf': _arredondar(redutorIrrf),
+      'isento_irrf_2026': isentoIrrf2026,
       'pensao': _arredondar(pensao),
       'outros': _arredondar(outros),
       'acrescimos': _arredondar(acrescimos),

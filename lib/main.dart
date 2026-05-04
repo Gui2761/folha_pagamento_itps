@@ -332,6 +332,8 @@ class _HomeScreenState extends State<HomeScreen> {
           temInss: f['tem_inss'] == 1,
           temIrrf: f['tem_irrf'] == 1,
           configData: _configData!,
+          irrfManual: f['irrf_manual'] ?? 0.0,
+          irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
         );
         tBruto += calc['bruto'] ?? 0.0;
         tInss += calc['inss'] ?? 0.0;
@@ -674,6 +676,8 @@ class _HomeScreenState extends State<HomeScreen> {
     double irrfSipes = calc['irrf_sipes'] ?? 0.0;
     double irrfFinal = calc['irrf'] ?? 0.0;
     bool irrfManualInformado = calc['irrf_manual_informado'] ?? false;
+    double redutorIrrf = calc['redutor_irrf'] ?? 0.0;
+    bool isentoIrrf2026 = calc['isento_irrf_2026'] ?? false;
 
     showDialog(
       context: context,
@@ -709,7 +713,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 // SEÇÃO IRRF
                 _buildHeaderSecao("IRRF - Imposto de Renda", Icons.request_quote, Colors.red),
                 _buildItemCalculo("Base de Cálculo IRRF", baseIrrf, info: "Bruto - INSS Total - Pensão"),
-                _buildItemCalculo("IRRF Total (sobre Base Global)", irrfTotal),
+                if (isentoIrrf2026)
+                  _buildItemCalculo("IRRF Total (Regra 2026)", 0.0, info: "Isento (Salário Bruto Total <= R\$ 5.000,00)")
+                else ...[
+                  _buildItemCalculo("IRRF (Tabela Tradicional)", irrfTotal + redutorIrrf),
+                  if (redutorIrrf > 0)
+                    _buildItemCalculo("(-) Redutor IRRF 2026", redutorIrrf, isDeducao: true, info: "Atenuação para salários até R\$ 7.350,00"),
+                  if (redutorIrrf > 0)
+                    _buildItemCalculo("IRRF Total Global", irrfTotal, info: "Imposto após aplicação do redutor"),
+                ],
                 _buildItemCalculo(
                   "(-) IRRF já pago no SIPES", 
                   irrfSipes, 
@@ -1189,9 +1201,28 @@ class _HomeScreenState extends State<HomeScreen> {
                                       items: _cargos
                                           .map((c) => DropdownMenuItem<int>(
                                               value: c['id'],
-                                              child: Text("${c['nome']}",
-                                                  overflow:
-                                                      TextOverflow.ellipsis)))
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  Text("${c['nome']}",
+                                                      style: const TextStyle(
+                                                          fontSize: 13,
+                                                          fontWeight:
+                                                              FontWeight.bold),
+                                                      overflow:
+                                                          TextOverflow.ellipsis),
+                                                  Text(
+                                                      "${c['locacao'] ?? 'Sem Setor'} • ${c['percentual_padrao']}%",
+                                                      style: TextStyle(
+                                                          fontSize: 11,
+                                                          color: Colors.grey[700]),
+                                                      overflow:
+                                                          TextOverflow.ellipsis),
+                                                ],
+                                              )))
                                           .toList(),
                                       onChanged: _onCargoChanged,
                                     ),
