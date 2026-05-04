@@ -20,8 +20,28 @@ class DatabaseHelper {
     if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
       sqfliteFfiInit();
       final databaseFactory = databaseFactoryFfi;
-      final appDocumentsDir = await getApplicationDocumentsDirectory();
-      path = join(appDocumentsDir.path, filePath);
+      
+      // Lógica para Banco de Dados Compartilhado (Rede)
+      // Verifica se o drive S: (ou o caminho de rede) está disponível
+      final sharedDrive = Directory('S:\\');
+      String folderName = 'SistemaFolhaITPS';
+      
+      if (sharedDrive.existsSync()) {
+        // Se o S: existe, tenta criar uma pasta lá para o banco
+        final sharedPath = join('S:\\', folderName);
+        final dir = Directory(sharedPath);
+        if (!dir.existsSync()) {
+          dir.createSync(recursive: true);
+        }
+        path = join(sharedPath, filePath);
+        print("Utilizando Banco de Dados em REDE: $path");
+      } else {
+        // Caso contrário, usa a pasta local de Documentos do usuário
+        final appDocumentsDir = await getApplicationDocumentsDirectory();
+        path = join(appDocumentsDir.path, filePath);
+        print("Utilizando Banco de Dados LOCAL: $path");
+      }
+
       return await databaseFactory.openDatabase(
         path,
         options: OpenDatabaseOptions(
