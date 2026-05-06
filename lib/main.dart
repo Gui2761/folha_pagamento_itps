@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -54,13 +55,14 @@ class MyApp extends StatelessWidget {
           labelStyle: TextStyle(color: Colors.grey[700]),
         ),
       ),
-      home: const HomeScreen(),
+      home: const LoginScreen(),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final Map<String, dynamic> userData;
+  const HomeScreen({super.key, required this.userData});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -72,6 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _cargos = [];
   bool _isLoading = true;
   int? _editingId;
+  Timer? _refreshTimer;
 
   final _formKey = GlobalKey<FormState>();
 
@@ -107,10 +110,20 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _refreshTudo();
+    // Configura o timer para atualizar automaticamente a cada 15 segundos
+    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
+      _refreshTudo(silencioso: true);
+    });
   }
 
-  Future<void> _refreshTudo() async {
-    setState(() => _isLoading = true);
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshTudo({bool silencioso = false}) async {
+    if (!silencioso) setState(() => _isLoading = true);
     final configs = await DatabaseHelper.instance.loadFullConfig();
     final funcs = await DatabaseHelper.instance.readFuncionarios();
     final cargos = await DatabaseHelper.instance.readCargos();
@@ -121,6 +134,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _cargos = cargos;
       _isLoading = false;
     });
+    if (silencioso) {
+      debugPrint("Folha RH: Sincronização automática realizada.");
+    }
   }
 
   // === SALVAR ===
@@ -954,19 +970,21 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: const Icon(Icons.info_outline, color: Colors.grey),
                 tooltip: "Ver Detalhes do Cálculo",
                 onPressed: () => _mostrarDetalhesCalculo(f['nome'], calc)),
-            IconButton(
-                icon: const Icon(Icons.edit_outlined,
-                    color: Colors.blue, size: 20),
-                onPressed: () => _carregarParaEdicao(f),
-                tooltip: "Editar"),
-            IconButton(
-                icon: const Icon(Icons.delete_outline,
-                    color: Colors.red, size: 20),
-                onPressed: () async {
-                  await DatabaseHelper.instance.deleteFuncionario(f['id']);
-                  _refreshTudo();
-                },
-                tooltip: "Remover"),
+            if (widget.userData['permissao'] != 'leitura') ...[
+              IconButton(
+                  icon: const Icon(Icons.edit_outlined,
+                      color: Colors.blue, size: 20),
+                  onPressed: () => _carregarParaEdicao(f),
+                  tooltip: "Editar"),
+              IconButton(
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.red, size: 20),
+                  onPressed: () async {
+                    await DatabaseHelper.instance.deleteFuncionario(f['id']);
+                    _refreshTudo();
+                  },
+                  tooltip: "Remover"),
+            ],
           ],
         )),
       ]));
@@ -988,6 +1006,30 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: const Color(0xFF0D47A1),
         foregroundColor: Colors.white,
         actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(widget.userData['usuario'].toString().toUpperCase(),
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.bold)),
+                Text(widget.userData['permissao'],
+                    style: const TextStyle(fontSize: 10, color: Colors.white70)),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: "Sair",
+            onPressed: () {
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+              );
+            },
+          ),
+          const VerticalDivider(color: Colors.white24, indent: 12, endIndent: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: FilledButton.icon(
@@ -1017,7 +1059,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   context,
                   MaterialPageRoute(
                       builder: (_) => ConfigScreen(
-                          data: _configData!, onSave: _refreshTudo))),
+                          data: _configData!, onSave: _refreshTudo, userData: widget.userData))),
               icon: const Icon(Icons.settings, size: 18),
               label: const Text("Config."),
               style: FilledButton.styleFrom(
@@ -1029,7 +1071,8 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
 
       // BOTÃO FLUTUANTE PARA ABRIR O FORMULÁRIO
-      floatingActionButton: !_mostrarFormulario
+      floatingActionButton: (!_mostrarFormulario &&
+              widget.userData['permissao'] != 'leitura')
           ? FloatingActionButton(
               heroTag: null,
               onPressed: () {
@@ -1686,8 +1729,9 @@ class CpfInputFormatter extends TextInputFormatter {
 
 class ConfigScreen extends StatefulWidget {
   final Map<String, dynamic> data;
+  final Map<String, dynamic> userData;
   final VoidCallback onSave;
-  const ConfigScreen({super.key, required this.data, required this.onSave});
+  const ConfigScreen({super.key, required this.data, required this.onSave, required this.userData});
   @override
   State<ConfigScreen> createState() => _ConfigScreenState();
 }
@@ -1706,8 +1750,74 @@ class _ConfigScreenState extends State<ConfigScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(
+        length: widget.userData['permissao'] == 'admin' ? 4 : 3, vsync: this);
     _carregarDados();
+    if (widget.userData['permissao'] == 'admin') _carregarUsuarios();
+  }
+
+  List<Map<String, dynamic>> _usuarios = [];
+  void _carregarUsuarios() async {
+    final users = await DatabaseHelper.instance.readUsuarios();
+    setState(() => _usuarios = users);
+  }
+
+  void _abrirDialogoUsuario() {
+    final userCtrl = TextEditingController();
+    final passCtrl = TextEditingController();
+    String permissao = 'leitura';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text("Novo Usuário"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                  controller: userCtrl,
+                  decoration: const InputDecoration(labelText: "Usuário")),
+              const SizedBox(height: 12),
+              TextField(
+                  controller: passCtrl,
+                  decoration: const InputDecoration(labelText: "Senha")),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: permissao,
+                decoration: const InputDecoration(labelText: "Permissão"),
+                items: const [
+                  DropdownMenuItem(value: 'admin', child: Text("Admin (Tudo)")),
+                  DropdownMenuItem(
+                      value: 'editor', child: Text("Editor (Edita Dados)")),
+                  DropdownMenuItem(
+                      value: 'leitura', child: Text("Leitura (Só vê)")),
+                ],
+                onChanged: (v) => setDialogState(() => permissao = v!),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text("Cancelar")),
+            ElevatedButton(
+                onPressed: () async {
+                  if (userCtrl.text.isNotEmpty && passCtrl.text.isNotEmpty) {
+                    await DatabaseHelper.instance.createUsuario({
+                      'usuario': userCtrl.text,
+                      'senha': passCtrl.text,
+                      'permissao': permissao,
+                    });
+                    _carregarUsuarios();
+                    if (mounted) Navigator.pop(ctx);
+                  }
+                },
+                child: const Text("Salvar")),
+          ],
+        ),
+      ),
+    );
   }
 
   void _carregarDados() async {
@@ -2054,10 +2164,12 @@ class _ConfigScreenState extends State<ConfigScreen>
           labelColor: const Color(0xFF0D47A1),
           unselectedLabelColor: Colors.grey[600],
           labelStyle: const TextStyle(fontWeight: FontWeight.bold),
-          tabs: const [
-            Tab(text: "Geral", icon: Icon(Icons.settings_outlined)),
-            Tab(text: "Tabelas", icon: Icon(Icons.table_chart_outlined)),
-            Tab(text: "Cargos", icon: Icon(Icons.badge_outlined)),
+          tabs: [
+            const Tab(text: "Geral", icon: Icon(Icons.settings_outlined)),
+            const Tab(text: "Tabelas", icon: Icon(Icons.table_chart_outlined)),
+            const Tab(text: "Cargos", icon: Icon(Icons.badge_outlined)),
+            if (widget.userData['permissao'] == 'admin')
+              const Tab(text: "Usuários", icon: Icon(Icons.people_outline)),
           ],
         ),
       ),
@@ -2067,6 +2179,7 @@ class _ConfigScreenState extends State<ConfigScreen>
           _buildGeralTab(),
           _buildTabelasTab(),
           _buildCargosTab(),
+          if (widget.userData['permissao'] == 'admin') _buildUsuariosTab(),
         ],
       ),
     );
@@ -2420,9 +2533,204 @@ class _ConfigScreenState extends State<ConfigScreen>
       ],
     );
   }
+
+  Widget _buildUsuariosTab() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Usuários do Sistema",
+                      style:
+                          TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                  Text("Gerencie quem pode acessar e editar a folha.",
+                      style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+                ],
+              ),
+              ElevatedButton.icon(
+                onPressed: _abrirDialogoUsuario,
+                icon: const Icon(Icons.person_add_outlined),
+                label: const Text("NOVO USUÁRIO"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF0D47A1),
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            itemCount: _usuarios.length,
+            itemBuilder: (ctx, idx) {
+              final u = _usuarios[idx];
+              return Card(
+                elevation: 0,
+                margin: const EdgeInsets.only(bottom: 12),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: Colors.grey.shade200)),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor:
+                        const Color(0xFF0D47A1).withValues(alpha: 0.1),
+                    child: const Icon(Icons.person_outline,
+                        color: Color(0xFF0D47A1)),
+                  ),
+                  title: Text(u['usuario'],
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text(
+                      "Nível: ${u['permissao'].toString().toUpperCase()}"),
+                  trailing: u['usuario'] == 'admin'
+                      ? const Chip(label: Text("Sistema"))
+                      : IconButton(
+                          icon: const Icon(Icons.delete_outline,
+                              color: Colors.red),
+                          onPressed: () async {
+                            await DatabaseHelper.instance
+                                .deleteUsuario(u['id']);
+                            _carregarUsuarios();
+                          },
+                        ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final TextEditingController _userCtrl = TextEditingController();
+  final TextEditingController _passCtrl = TextEditingController();
+  bool _isLoading = false;
+  String? _error;
+
+  void _tentarLogin() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final user = await DatabaseHelper.instance.login(
+        _userCtrl.text.trim(),
+        _passCtrl.text.trim(),
+      );
+
+      if (user != null) {
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => HomeScreen(userData: user),
+          ),
+        );
+      } else {
+        setState(() => _error = "Usuário ou senha inválidos");
+      }
+    } catch (e) {
+      setState(() => _error = "Erro ao conectar ao banco: $e");
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      body: Center(
+        child: Container(
+          width: 400,
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.1),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              )
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.lock_person, size: 64, color: Color(0xFF0D47A1)),
+              const SizedBox(height: 24),
+              const Text(
+                "Sistema Folha ITPS",
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text("Faça login para continuar", style: TextStyle(color: Colors.grey)),
+              const SizedBox(height: 32),
+              TextField(
+                controller: _userCtrl,
+                decoration: const InputDecoration(
+                  labelText: "Usuário",
+                  prefixIcon: Icon(Icons.person),
+                ),
+                onSubmitted: (_) => _tentarLogin(),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _passCtrl,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: "Senha",
+                  prefixIcon: Icon(Icons.key),
+                ),
+                onSubmitted: (_) => _tentarLogin(),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 16),
+                Text(_error!, style: const TextStyle(color: Colors.red)),
+              ],
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _tentarLogin,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0D47A1),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: _isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text("ENTRAR", style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // === UTILITÁRIOS GLOBAIS DE FORMATAÇÃO ===
+
 final _moneyFormatter = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
 
 double _parseMoeda(String text) {

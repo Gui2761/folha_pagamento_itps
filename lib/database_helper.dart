@@ -21,31 +21,30 @@ class DatabaseHelper {
       sqfliteFfiInit();
       final databaseFactory = databaseFactoryFfi;
       
-      // Lógica para Banco de Dados Compartilhado (Rede)
-      // Verifica se o drive S: (ou o caminho de rede) está disponível
-      final sharedDrive = Directory('S:\\');
-      String folderName = 'SistemaFolhaITPS';
+      // Caminho de Rede compartilhado pelo usuário
+      const String networkPath = r'\\172.23.6.7\gerh\1- COAPE\FolhaITPS_Dados';
       
-      if (sharedDrive.existsSync()) {
-        // Se o S: existe, tenta criar uma pasta lá para o banco
-        final sharedPath = join('S:\\', folderName);
-        final dir = Directory(sharedPath);
-        if (!dir.existsSync()) {
-          dir.createSync(recursive: true);
+      // Verifica se a pasta de rede existe, se não, tenta criar (ou usa local como fallback se falhar)
+      final dir = Directory(networkPath);
+      String finalDir;
+      
+      try {
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
         }
-        path = join(sharedPath, filePath);
-        print("Utilizando Banco de Dados em REDE: $path");
-      } else {
-        // Caso contrário, usa a pasta local de Documentos do usuário
+        finalDir = networkPath;
+      } catch (e) {
+        // Se der erro de rede (offline), salva nos documentos locais como fallback
         final appDocumentsDir = await getApplicationDocumentsDirectory();
-        path = join(appDocumentsDir.path, filePath);
-        print("Utilizando Banco de Dados LOCAL: $path");
+        finalDir = appDocumentsDir.path;
+        print("Aviso: Caminho de rede não encontrado ou sem permissão. Usando local: $e");
       }
 
+      path = join(finalDir, filePath);
       return await databaseFactory.openDatabase(
         path,
         options: OpenDatabaseOptions(
-          version: 3,
+          version: 4,
           onCreate: _onCreate,
           onUpgrade: _onUpgrade,
         ),
@@ -53,7 +52,7 @@ class DatabaseHelper {
     } else {
       final dbPath = await getDatabasesPath();
       path = join(dbPath, filePath);
-      return await openDatabase(path, version: 3, onCreate: _onCreate, onUpgrade: _onUpgrade);
+      return await openDatabase(path, version: 4, onCreate: _onCreate, onUpgrade: _onUpgrade);
     }
   }
 
@@ -81,6 +80,22 @@ class DatabaseHelper {
         irrf_manual REAL DEFAULT 0.0
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario TEXT UNIQUE,
+        senha TEXT,
+        permissao TEXT DEFAULT 'leitura' -- admin, editor, leitura
+      )
+    ''');
+
+    // Inserir usuário administrador padrão
+    await db.insert('usuarios', {
+      'usuario': 'admin',
+      'senha': 'itps2026',
+      'permissao': 'admin'
+    });
 
     await db.execute('''
       CREATE TABLE cargos (
@@ -272,6 +287,34 @@ class DatabaseHelper {
     await db.update('config_irrf', {'limite': limite, 'aliquota': aliquota, 'deducao': deducao}, where: 'id = ?', whereArgs: [id]);
   }
 
+  Future<Map<String, dynamic>?> login(String usuario, String senha) async {
+    final db = await instance.database;
+    final res = await db.query(
+      'usuarios',
+      where: 'usuario = ? AND senha = ?',
+      whereArgs: [usuario, senha],
+    );
+    if (res.isNotEmpty) {
+      return res.first;
+    }
+    return null;
+  }
+
+  Future<List<Map<String, dynamic>>> readUsuarios() async {
+    final db = await instance.database;
+    return await db.query('usuarios', orderBy: 'usuario ASC');
+  }
+
+  Future<int> createUsuario(Map<String, dynamic> row) async {
+    final db = await instance.database;
+    return await db.insert('usuarios', row);
+  }
+
+  Future<int> deleteUsuario(int id) async {
+    final db = await instance.database;
+    return await db.delete('usuarios', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       // Adicionar coluna irrf_sipes_real para bancos existentes
@@ -287,6 +330,23 @@ class DatabaseHelper {
       } catch (_) {
         // Coluna já existe, ignorar
       }
+    }
+    if (oldVersion < 4) {
+      try {
+        await db.execute('''
+          CREATE TABLE usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT UNIQUE,
+            senha TEXT,
+            permissao TEXT DEFAULT 'leitura'
+          )
+        ''');
+        await db.insert('usuarios', {
+          'usuario': 'admin',
+          'senha': 'itps2026',
+          'permissao': 'admin'
+        });
+      } catch (_) {}
     }
   }
 
