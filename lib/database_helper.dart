@@ -44,7 +44,7 @@ class DatabaseHelper {
       return await databaseFactory.openDatabase(
         path,
         options: OpenDatabaseOptions(
-          version: 4,
+          version: 5,
           onCreate: _onCreate,
           onUpgrade: _onUpgrade,
         ),
@@ -52,7 +52,7 @@ class DatabaseHelper {
     } else {
       final dbPath = await getDatabasesPath();
       path = join(dbPath, filePath);
-      return await openDatabase(path, version: 4, onCreate: _onCreate, onUpgrade: _onUpgrade);
+      return await openDatabase(path, version: 5, onCreate: _onCreate, onUpgrade: _onUpgrade);
     }
   }
 
@@ -109,6 +109,48 @@ class DatabaseHelper {
     await db.execute('CREATE TABLE config_geral (chave TEXT PRIMARY KEY, valor REAL)');
     await db.execute('CREATE TABLE config_inss (id INTEGER PRIMARY KEY AUTOINCREMENT, limite REAL, aliquota REAL, deducao REAL)');
     await db.execute('CREATE TABLE config_irrf (id INTEGER PRIMARY KEY AUTOINCREMENT, limite REAL, aliquota REAL, deducao REAL)');
+
+    await db.execute('''
+      CREATE TABLE folhas_salvas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mes_ano TEXT UNIQUE,
+        data_fechamento TEXT,
+        criado_por TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE folha_historico_detalhe (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        folha_salva_id INTEGER,
+        funcionario_id INTEGER,
+        nome TEXT,
+        cpf TEXT,
+        cargo_nome TEXT,
+        locacao TEXT,
+        vinculo TEXT,
+        percentual REAL,
+        valor_sipes REAL,
+        pensao REAL,
+        outros REAL,
+        acrescimos REAL,
+        bruto REAL,
+        inss REAL,
+        irrf REAL,
+        liquido REAL,
+        FOREIGN KEY (folha_salva_id) REFERENCES folhas_salvas (id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE auditoria (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        usuario TEXT,
+        acao TEXT,
+        data_hora TEXT,
+        detalhes TEXT
+      )
+    ''');
 
     await db.execute("INSERT INTO cargos (nome, locacao, percentual_padrao) VALUES ('Agente Administrativo', 'Doc. e Inspeção', 0.75)");
     await db.execute("INSERT INTO cargos (nome, locacao, percentual_padrao) VALUES ('Agente Administrativo', 'Ger. Executiva', 0.41)");
@@ -210,9 +252,13 @@ class DatabaseHelper {
     await db.execute("INSERT INTO config_irrf (limite, aliquota, deducao) VALUES (999999999.00, 27.5, 908.73)");
   }
 
-  Future<int> createFuncionario(Map<String, dynamic> row) async {
+  Future<int> createFuncionario(Map<String, dynamic> row, {String? usuario}) async {
     final db = await instance.database;
-    return await db.insert('funcionarios', row);
+    final id = await db.insert('funcionarios', row);
+    if (usuario != null) {
+      await registrarLog(usuario, 'CADASTRAR_COLABORADOR', 'Cadastrou o colaborador ${row['nome']} (CPF: ${row['cpf']}, Vínculo: ${row['vinculo']})');
+    }
+    return id;
   }
 
   Future<List<Map<String, dynamic>>> readFuncionarios() async {
@@ -220,20 +266,40 @@ class DatabaseHelper {
     return await db.query('funcionarios', orderBy: 'nome ASC');
   }
 
-  Future<int> updateFuncionario(Map<String, dynamic> row) async {
+  Future<int> updateFuncionario(Map<String, dynamic> row, {String? usuario}) async {
     final db = await instance.database;
     int id = row['id'];
+    if (usuario != null) {
+      final antigas = await db.query('funcionarios', where: 'id = ?', whereArgs: [id]);
+      String anterior = antigas.isNotEmpty ? " (anterior: ${antigas.first['nome']})" : "";
+      await registrarLog(usuario, 'EDITAR_COLABORADOR', 'Editou o colaborador ${row['nome']}$anterior (CPF: ${row['cpf']})');
+    }
     return await db.update('funcionarios', row, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<int> deleteFuncionario(int id) async {
+  Future<int> deleteFuncionario(int id, {String? usuario}) async {
     final db = await instance.database;
-    return await db.delete('funcionarios', where: 'id = ?', whereArgs: [id]);
+    String details = "ID: $id";
+    if (usuario != null) {
+      final res = await db.query('funcionarios', where: 'id = ?', whereArgs: [id]);
+      if (res.isNotEmpty) {
+        details = "${res.first['nome']} (CPF: ${res.first['cpf']})";
+      }
+    }
+    final result = await db.delete('funcionarios', where: 'id = ?', whereArgs: [id]);
+    if (usuario != null) {
+      await registrarLog(usuario, 'REMOVER_COLABORADOR', 'Removeu o colaborador $details');
+    }
+    return result;
   }
 
-  Future<int> createCargo(Map<String, dynamic> row) async {
+  Future<int> createCargo(Map<String, dynamic> row, {String? usuario}) async {
     final db = await instance.database;
-    return await db.insert('cargos', row);
+    final id = await db.insert('cargos', row);
+    if (usuario != null) {
+      await registrarLog(usuario, 'CADASTRAR_CARGO', 'Cadastrou o cargo ${row['nome']} - Lotação: ${row['locacao']}');
+    }
+    return id;
   }
 
   Future<List<Map<String, dynamic>>> readCargos() async {
@@ -241,15 +307,29 @@ class DatabaseHelper {
     return await db.query('cargos', orderBy: 'nome ASC');
   }
 
-  Future<int> updateCargo(Map<String, dynamic> row) async {
+  Future<int> updateCargo(Map<String, dynamic> row, {String? usuario}) async {
     final db = await instance.database;
     int id = row['id'];
+    if (usuario != null) {
+      await registrarLog(usuario, 'EDITAR_CARGO', 'Editou o cargo ${row['nome']} - Lotação: ${row['locacao']}');
+    }
     return await db.update('cargos', row, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<int> deleteCargo(int id) async {
+  Future<int> deleteCargo(int id, {String? usuario}) async {
     final db = await instance.database;
-    return await db.delete('cargos', where: 'id = ?', whereArgs: [id]);
+    String details = "ID: $id";
+    if (usuario != null) {
+      final res = await db.query('cargos', where: 'id = ?', whereArgs: [id]);
+      if (res.isNotEmpty) {
+        details = "${res.first['nome']} - Lotação: ${res.first['locacao']}";
+      }
+    }
+    final result = await db.delete('cargos', where: 'id = ?', whereArgs: [id]);
+    if (usuario != null) {
+      await registrarLog(usuario, 'REMOVER_CARGO', 'Removeu o cargo $details');
+    }
+    return result;
   }
 
   Future<Map<String, dynamic>> loadFullConfig() async {
@@ -272,18 +352,29 @@ class DatabaseHelper {
     }
   }
 
-  Future<void> updateConfigValor(String chave, double valor) async {
+  Future<void> updateConfigValor(String chave, double valor, {String? usuario}) async {
     final db = await instance.database;
+    if (usuario != null) {
+      final antigas = await db.query('config_geral', where: 'chave = ?', whereArgs: [chave]);
+      String anterior = antigas.isNotEmpty ? " (de ${antigas.first['valor']} para $valor)" : " (para $valor)";
+      await registrarLog(usuario, 'EDITAR_CONFIG', 'Alterou configuração $chave$anterior');
+    }
     await db.insert('config_geral', {'chave': chave, 'valor': valor}, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<void> updateTabelaInss(int id, double limite, double aliquota, double deducao) async {
+  Future<void> updateTabelaInss(int id, double limite, double aliquota, double deducao, {String? usuario}) async {
     final db = await instance.database;
+    if (usuario != null) {
+      await registrarLog(usuario, 'EDITAR_TABELA_INSS', 'Editou faixa de INSS ID: $id (Limite: $limite, Alíquota: $aliquota%, Dedução: $deducao)');
+    }
     await db.update('config_inss', {'limite': limite, 'aliquota': aliquota, 'deducao': deducao}, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<void> updateTabelaIrrf(int id, double limite, double aliquota, double deducao) async {
+  Future<void> updateTabelaIrrf(int id, double limite, double aliquota, double deducao, {String? usuario}) async {
     final db = await instance.database;
+    if (usuario != null) {
+      await registrarLog(usuario, 'EDITAR_TABELA_IRRF', 'Editou faixa de IRRF ID: $id (Limite: $limite, Alíquota: $aliquota%, Dedução: $deducao)');
+    }
     await db.update('config_irrf', {'limite': limite, 'aliquota': aliquota, 'deducao': deducao}, where: 'id = ?', whereArgs: [id]);
   }
 
@@ -348,6 +439,49 @@ class DatabaseHelper {
         });
       } catch (_) {}
     }
+    if (oldVersion < 5) {
+      try {
+        await db.execute('''
+          CREATE TABLE folhas_salvas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mes_ano TEXT UNIQUE,
+            data_fechamento TEXT,
+            criado_por TEXT
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE folha_historico_detalhe (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            folha_salva_id INTEGER,
+            funcionario_id INTEGER,
+            nome TEXT,
+            cpf TEXT,
+            cargo_nome TEXT,
+            locacao TEXT,
+            vinculo TEXT,
+            percentual REAL,
+            valor_sipes REAL,
+            pensao REAL,
+            outros REAL,
+            acrescimos REAL,
+            bruto REAL,
+            inss REAL,
+            irrf REAL,
+            liquido REAL,
+            FOREIGN KEY (folha_salva_id) REFERENCES folhas_salvas (id) ON DELETE CASCADE
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE auditoria (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT,
+            acao TEXT,
+            data_hora TEXT,
+            detalhes TEXT
+          )
+        ''');
+      } catch (_) {}
+    }
   }
 
   Future<void> resetTabelasFiscais() async {
@@ -366,6 +500,104 @@ class DatabaseHelper {
       await txn.insert('config_irrf', {'limite': 3751.05, 'aliquota': 15.0, 'deducao': 394.16});
       await txn.insert('config_irrf', {'limite': 4664.68, 'aliquota': 22.5, 'deducao': 675.49});
       await txn.insert('config_irrf', {'limite': 999999999.00, 'aliquota': 27.5, 'deducao': 908.73});
+    });
+  }
+
+  // --- TRILHA DE AUDITORIA ---
+  Future<void> registrarLog(String usuario, String acao, String detalhes) async {
+    try {
+      final db = await instance.database;
+      await db.insert('auditoria', {
+        'usuario': usuario,
+        'acao': acao,
+        'data_hora': DateTime.now().toLocal().toString().substring(0, 19),
+        'detalhes': detalhes,
+      });
+    } catch (e) {
+      print("Erro ao registrar log: $e");
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> readLogs() async {
+    try {
+      final db = await instance.database;
+      return await db.query('auditoria', orderBy: 'id DESC', limit: 1000);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> limparLogs() async {
+    try {
+      final db = await instance.database;
+      await db.delete('auditoria');
+    } catch (_) {}
+  }
+
+  // --- FECHAMENTO E HISTÓRICO MENSAL ---
+  Future<int> fecharFolha(String mesAno, String usuario, List<Map<String, dynamic>> detalhes) async {
+    final db = await instance.database;
+    return await db.transaction((txn) async {
+      final antigas = await txn.query('folhas_salvas', where: 'mes_ano = ?', whereArgs: [mesAno]);
+      if (antigas.isNotEmpty) {
+        int antigaId = antigas.first['id'] as int;
+        await txn.delete('folha_historico_detalhe', where: 'folha_salva_id = ?', whereArgs: [antigaId]);
+        await txn.delete('folhas_salvas', where: 'id = ?', whereArgs: [antigaId]);
+      }
+
+      int folhaId = await txn.insert('folhas_salvas', {
+        'mes_ano': mesAno,
+        'data_fechamento': DateTime.now().toLocal().toString().substring(0, 19),
+        'criado_por': usuario,
+      });
+
+      for (var item in detalhes) {
+        await txn.insert('folha_historico_detalhe', {
+          'folha_salva_id': folhaId,
+          'funcionario_id': item['funcionario_id'],
+          'nome': item['nome'],
+          'cpf': item['cpf'],
+          'cargo_nome': item['cargo_nome'],
+          'locacao': item['locacao'],
+          'vinculo': item['vinculo'],
+          'percentual': item['percentual'],
+          'valor_sipes': item['valor_sipes'],
+          'pensao': item['pensao'],
+          'outros': item['outros'],
+          'acrescimos': item['acrescimos'],
+          'bruto': item['bruto'],
+          'inss': item['inss'],
+          'irrf': item['irrf'],
+          'liquido': item['liquido'],
+        });
+      }
+      return folhaId;
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> readFolhasSalvas() async {
+    try {
+      final db = await instance.database;
+      return await db.query('folhas_salvas', orderBy: 'mes_ano DESC');
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> readFolhaDetalhes(int folhaSalvaId) async {
+    try {
+      final db = await instance.database;
+      return await db.query('folha_historico_detalhe', where: 'folha_salva_id = ?', whereArgs: [folhaSalvaId], orderBy: 'nome ASC');
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> deleteFolhaSalva(int folhaSalvaId) async {
+    final db = await instance.database;
+    await db.transaction((txn) async {
+      await txn.delete('folha_historico_detalhe', where: 'folha_salva_id = ?', whereArgs: [folhaSalvaId]);
+      await txn.delete('folhas_salvas', where: 'id = ?', whereArgs: [folhaSalvaId]);
     });
   }
 }

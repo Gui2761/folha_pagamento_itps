@@ -8,6 +8,11 @@ import 'package:excel/excel.dart' as excel_pkg;
 import 'package:file_selector/file_selector.dart';
 import 'database_helper.dart';
 import 'calculadora_taxas.dart';
+import 'gerador_pdf.dart';
+import 'graficos.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 void main() {
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -72,9 +77,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, dynamic>? _configData;
   List<Map<String, dynamic>> _funcionarios = [];
   List<Map<String, dynamic>> _cargos = [];
+  List<Map<String, dynamic>> _folhasSalvas = [];
+  List<Map<String, dynamic>> _logsAuditoria = [];
   bool _isLoading = true;
   int? _editingId;
   Timer? _refreshTimer;
+  int _activeTab = 0; // 0: Dashboard, 1: Colaboradores, 2: Fechamento, 3: Auditoria
+  bool _isDarkMode = false;
 
   final _formKey = GlobalKey<FormState>();
 
@@ -94,7 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _acrescimosCtrl = TextEditingController();
   final _irrfManualCtrl = TextEditingController();
 
-  // Scrolls
+  // Scroll Controllers
   final ScrollController _horizontalScroll = ScrollController();
   final ScrollController _verticalScroll = ScrollController();
 
@@ -102,9 +111,14 @@ class _HomeScreenState extends State<HomeScreen> {
   int? _selectedCargoId;
   bool _temInss = false;
   bool _temIrrf = true;
-
-  // Variável para controlar a visibilidade do formulário
   bool _mostrarFormulario = false;
+
+  // Filtro de auditoria
+  String _filtroAuditoria = '';
+
+  // Parâmetros de Fechamento
+  String _mesFechamento = 'Janeiro';
+  String _anoFechamento = '2026';
 
   @override
   void initState() {
@@ -124,18 +138,28 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _refreshTudo({bool silencioso = false}) async {
     if (!silencioso) setState(() => _isLoading = true);
-    final configs = await DatabaseHelper.instance.loadFullConfig();
-    final funcs = await DatabaseHelper.instance.readFuncionarios();
-    final cargos = await DatabaseHelper.instance.readCargos();
-    if (!mounted) return;
-    setState(() {
-      _configData = configs;
-      _funcionarios = funcs;
-      _cargos = cargos;
-      _isLoading = false;
-    });
-    if (silencioso) {
-      debugPrint("Folha RH: Sincronização automática realizada.");
+    try {
+      final configs = await DatabaseHelper.instance.loadFullConfig();
+      final funcs = await DatabaseHelper.instance.readFuncionarios();
+      final cargos = await DatabaseHelper.instance.readCargos();
+      final folhas = await DatabaseHelper.instance.readFolhasSalvas();
+      final logs = await DatabaseHelper.instance.readLogs();
+      if (!mounted) return;
+      setState(() {
+        _configData = configs;
+        _funcionarios = funcs;
+        _cargos = cargos;
+        _folhasSalvas = folhas;
+        _logsAuditoria = logs;
+        _isLoading = false;
+      });
+      if (silencioso) {
+        debugPrint("Folha RH: Sincronização automática realizada.");
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _mostrarSnack("Erro ao carregar dados: $e", Colors.red);
     }
   }
 
@@ -152,8 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'conta': _contaCtrl.text,
         'cargo_nome': _cargoManualCtrl.text,
         'locacao': _locacaoCtrl.text,
-        'percentual':
-            double.tryParse(_percentualCtrl.text.replaceAll(',', '.')) ?? 0.0,
+        'percentual': double.tryParse(_percentualCtrl.text.replaceAll(',', '.')) ?? 0.0,
         'valor_sipes': _parseMoeda(_sipesCtrl.text),
         'pensao': _parseMoeda(_pensaoCtrl.text),
         'outros': _parseMoeda(_outrosCtrl.text),
@@ -164,25 +187,25 @@ class _HomeScreenState extends State<HomeScreen> {
       };
 
       if (_editingId == null) {
-        await DatabaseHelper.instance.createFuncionario(dados);
-        if (mounted) _mostrarSnack("Colaborador cadastrado!", Colors.green);
+        await DatabaseHelper.instance.createFuncionario(dados, usuario: widget.userData['usuario']);
+        _mostrarSnackPremium("Colaborador cadastrado!", Icons.check_circle, Colors.green);
       } else {
         dados['id'] = _editingId!;
-        await DatabaseHelper.instance.updateFuncionario(dados);
-        if (mounted) _mostrarSnack("Dados atualizados!", Colors.blue);
+        await DatabaseHelper.instance.updateFuncionario(dados, usuario: widget.userData['usuario']);
+        _mostrarSnackPremium("Dados do colaborador atualizados!", Icons.edit, Colors.blue);
       }
       _limparForm();
-      setState(() => _mostrarFormulario = false); // Fecha o form ao salvar
+      setState(() => _mostrarFormulario = false);
       _refreshTudo();
     }
   }
 
   void _carregarParaEdicao(Map<String, dynamic> f) {
     setState(() {
-      _mostrarFormulario = true; // Abre o formulário ao editar
+      _mostrarFormulario = true;
       _editingId = f['id'];
       _nomeCtrl.text = f['nome'];
-      _cpfCtrl.text = f['cpf'];
+      _cpfCtrl.text = f['cpf'] ?? '';
       _rgCtrl.text = f['rg'] ?? '';
       _vinculoSelecionado = f['vinculo'] ?? 'Efetivo';
       _bancoCtrl.text = f['banco'] ?? '';
@@ -264,8 +287,55 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _mostrarSnack(String msg, Color cor) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), backgroundColor: cor));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: cor,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _mostrarSnackPremium(String msg, IconData icone, Color cor) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        content: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: _isDarkMode ? const Color(0xFF2C2C2C) : Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: cor.withValues(alpha: 0.5), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.15),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              )
+            ],
+          ),
+          child: Row(
+            children: [
+              Icon(icone, color: cor, size: 24),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  msg,
+                  style: TextStyle(
+                    color: _isDarkMode ? Colors.white : Colors.black87,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // === EXPORTAR EXCEL ===
@@ -303,40 +373,20 @@ class _HomeScreenState extends State<HomeScreen> {
       'ACRÉSCIMOS',
       'LÍQUIDO'
     ];
-    sheetResumo.appendRow(
-        headersResumo.map((e) => excel_pkg.TextCellValue(e)).toList());
+    sheetResumo.appendRow(headersResumo.map((e) => excel_pkg.TextCellValue(e)).toList());
 
     for (int i = 0; i < headersResumo.length; i++) {
       sheetResumo
-          .cell(
-              excel_pkg.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
+          .cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
           .cellStyle = styleHeaderResumo;
     }
 
-    List<String> categorias = [
-      'Efetivo',
-      'Comissionado',
-      'Cedido',
-      'Estagiário'
-    ];
-    double gBruto = 0,
-        gInss = 0,
-        gIrrf = 0,
-        gPensao = 0,
-        gOutros = 0,
-        gDesc = 0,
-        gAcres = 0,
-        gLiquido = 0;
+    List<String> categorias = ['Efetivo', 'Comissionado', 'Cedido', 'Estagiário'];
+    double gBruto = 0, gInss = 0, gIrrf = 0, gPensao = 0, gOutros = 0, gDesc = 0, gAcres = 0, gLiquido = 0;
 
     for (var cat in categorias) {
       var lista = _funcionarios.where((f) => f['vinculo'] == cat).toList();
-      double tBruto = 0,
-          tInss = 0,
-          tIrrf = 0,
-          tPensao = 0,
-          tOutros = 0,
-          tAcres = 0,
-          tLiquido = 0;
+      double tBruto = 0, tInss = 0, tIrrf = 0, tPensao = 0, tOutros = 0, tAcres = 0, tLiquido = 0;
 
       for (var f in lista) {
         final calc = CalculadoraTaxas.calcularFolha(
@@ -400,31 +450,14 @@ class _HomeScreenState extends State<HomeScreen> {
       if (lista.isNotEmpty) {
         excel_pkg.Sheet sheetCat = excel['Lista $cat'];
         List<String> headersDet = [
-          'NOME COMPLETO',
-          'CPF',
-          'RG',
-          'BANCO',
-          'AGÊNCIA',
-          'CONTA',
-          'CARGO',
-          'LOCAÇÃO',
-          'SIPES',
-          '%',
-          'BRUTO',
-          'INSS',
-          'IRRF',
-          'PENSÃO',
-          'OUTROS',
-          'ACRÉSCIMOS',
-          'LÍQUIDO'
+          'NOME COMPLETO', 'CPF', 'RG', 'BANCO', 'AGÊNCIA', 'CONTA', 'CARGO', 'LOCAÇÃO',
+          'SIPES', '%', 'BRUTO', 'INSS', 'IRRF', 'PENSÃO', 'OUTROS', 'ACRÉSCIMOS', 'LÍQUIDO'
         ];
-        sheetCat.appendRow(
-            headersDet.map((e) => excel_pkg.TextCellValue(e)).toList());
+        sheetCat.appendRow(headersDet.map((e) => excel_pkg.TextCellValue(e)).toList());
 
         for (int i = 0; i < headersDet.length; i++) {
           sheetCat
-              .cell(excel_pkg.CellIndex.indexByColumnRow(
-                  columnIndex: i, rowIndex: 0))
+              .cell(excel_pkg.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0))
               .cellStyle = styleHeaderLista;
         }
 
@@ -439,7 +472,7 @@ class _HomeScreenState extends State<HomeScreen> {
             temIrrf: f['tem_irrf'] == 1,
             configData: _configData!,
             irrfManual: f['irrf_manual'] ?? 0.0,
-            irrfSipesReal: f['irrf_sipes_real'] ?? 0.0, // fallback
+            irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
           );
           sheetCat.appendRow([
             excel_pkg.TextCellValue(f['nome']),
@@ -464,18 +497,16 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    final String fileName =
-        "folha_itps_v8_sincronizada_${DateFormat('dd-MM-yyyy').format(DateTime.now())}.xlsx";
-    final FileSaveLocation? result =
-        await getSaveLocation(suggestedName: fileName);
+    final String fileName = "folha_itps_sincronizada_${DateFormat('dd-MM-yyyy').format(DateTime.now())}.xlsx";
+    final FileSaveLocation? result = await getSaveLocation(suggestedName: fileName);
 
     if (result != null) {
       final List<int>? fileBytes = excel.save();
       if (fileBytes != null) {
         final File file = File(result.path);
         await file.writeAsBytes(fileBytes);
-        if (mounted)
-          _mostrarSnack("Relatório salvo com sucesso!", Colors.green);
+        await DatabaseHelper.instance.registrarLog(widget.userData['usuario'], 'EXPORTAR_EXCEL', 'Exportou planilha geral da folha para Excel');
+        _mostrarSnackPremium("Relatório salvo com sucesso!", Icons.check_circle, Colors.green);
       }
     }
   }
@@ -483,13 +514,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // === RELATÓRIO NA TELA ===
   void _mostrarRelatorioNaTela() {
     Map<String, double> somar(List<Map<String, dynamic>> lista) {
-      double tBruto = 0,
-          tInss = 0,
-          tIrrf = 0,
-          tPensao = 0,
-          tOutros = 0,
-          tAcres = 0,
-          tLiquido = 0;
+      double tBruto = 0, tInss = 0, tIrrf = 0, tPensao = 0, tOutros = 0, tAcres = 0, tLiquido = 0;
       for (var f in lista) {
         final calc = CalculadoraTaxas.calcularFolha(
           percentual: f['percentual'],
@@ -501,7 +526,7 @@ class _HomeScreenState extends State<HomeScreen> {
           temIrrf: f['tem_irrf'] == 1,
           configData: _configData!,
           irrfManual: f['irrf_manual'] ?? 0.0,
-          irrfSipesReal: f['irrf_sipes_real'] ?? 0.0, // fallback
+          irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
         );
         tBruto += calc['bruto'] ?? 0.0;
         tInss += calc['inss'] ?? 0.0;
@@ -512,65 +537,45 @@ class _HomeScreenState extends State<HomeScreen> {
         tLiquido += calc['liquido'] ?? 0.0;
       }
       return {
-        'bruto': tBruto,
-        'inss': tInss,
-        'irrf': tIrrf,
-        'pensao': tPensao,
-        'outros': tOutros,
-        'acrescimos': tAcres,
-        'liquido': tLiquido
+        'bruto': tBruto, 'inss': tInss, 'irrf': tIrrf, 'pensao': tPensao,
+        'outros': tOutros, 'acrescimos': tAcres, 'liquido': tLiquido
       };
     }
 
-    var efetivos =
-        _funcionarios.where((f) => f['vinculo'] == 'Efetivo').toList();
-    var comissionados =
-        _funcionarios.where((f) => f['vinculo'] == 'Comissionado').toList();
+    var efetivos = _funcionarios.where((f) => f['vinculo'] == 'Efetivo').toList();
+    var comissionados = _funcionarios.where((f) => f['vinculo'] == 'Comissionado').toList();
     var cedidos = _funcionarios.where((f) => f['vinculo'] == 'Cedido').toList();
-    var estagiarios =
-        _funcionarios.where((f) => f['vinculo'] == 'Estagiário').toList();
+    var estagiarios = _funcionarios.where((f) => f['vinculo'] == 'Estagiário').toList();
 
     var sEfetivos = somar(efetivos);
     var sComissionados = somar(comissionados);
     var sCedidos = somar(cedidos);
     var sEstagiarios = somar(estagiarios);
 
-    Widget linhaTabela(String titulo, Map<String, double> dados,
-        {bool isTotal = false}) {
-      double descontos = (dados['inss'] ?? 0) +
-          (dados['irrf'] ?? 0) +
-          (dados['pensao'] ?? 0) +
-          (dados['outros'] ?? 0);
+    Widget linhaTabela(String titulo, Map<String, double> dados, {bool isTotal = false}) {
+      double descontos = (dados['inss'] ?? 0) + (dados['irrf'] ?? 0) + (dados['pensao'] ?? 0) + (dados['outros'] ?? 0);
       TextStyle style = TextStyle(
-          fontWeight: isTotal ? FontWeight.bold : FontWeight.normal,
-          fontSize: 13);
+        fontWeight: isTotal ? FontWeight.bold : FontWeight.normal,
+        fontSize: 13,
+        color: _isDarkMode ? Colors.white : Colors.black87,
+      );
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           children: [
             Expanded(
-                flex: 2,
-                child: Text(titulo,
-                    style: style.copyWith(
-                        color: isTotal ? Colors.black : Colors.blue[900]))),
+              flex: 2,
+              child: Text(
+                titulo,
+                style: style.copyWith(color: isTotal ? (_isDarkMode ? Colors.cyan : Colors.black) : (_isDarkMode ? Colors.blue[300] : Colors.blue[900])),
+              ),
+            ),
             Expanded(child: Text(_formatMoeda(dados['bruto']), style: style)),
-            Expanded(
-                child: Text(_formatMoeda(dados['inss']),
-                    style: style.copyWith(color: Colors.red[700]))),
-            Expanded(
-                child: Text(_formatMoeda(dados['irrf']),
-                    style: style.copyWith(color: Colors.red[700]))),
-            Expanded(
-                child: Text(_formatMoeda(descontos),
-                    style: style.copyWith(fontWeight: FontWeight.bold))),
-            Expanded(
-                child: Text(_formatMoeda(dados['acrescimos']),
-                    style: style.copyWith(color: Colors.green[600]))),
-            Expanded(
-                child: Text(_formatMoeda(dados['liquido']),
-                    style: style.copyWith(
-                        color: Colors.green[800],
-                        fontWeight: FontWeight.bold))),
+            Expanded(child: Text(_formatMoeda(dados['inss']), style: style.copyWith(color: Colors.red[300]))),
+            Expanded(child: Text(_formatMoeda(dados['irrf']), style: style.copyWith(color: Colors.red[300]))),
+            Expanded(child: Text(_formatMoeda(descontos), style: style.copyWith(fontWeight: FontWeight.bold))),
+            Expanded(child: Text(_formatMoeda(dados['acrescimos']), style: style.copyWith(color: Colors.green[300]))),
+            Expanded(child: Text(_formatMoeda(dados['liquido']), style: style.copyWith(color: Colors.green[400], fontWeight: FontWeight.bold))),
           ],
         ),
       );
@@ -579,84 +584,53 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text("Resumo da Folha por Vínculo"),
+        backgroundColor: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
+        title: Text(
+          "Resumo da Folha por Vínculo",
+          style: TextStyle(color: _isDarkMode ? Colors.white : Colors.black87),
+        ),
         content: SizedBox(
           width: 1000,
           height: 450,
           child: Column(
             children: [
               Container(
-                color: Colors.grey[200],
+                color: _isDarkMode ? Colors.grey[800] : Colors.grey[200],
                 padding: const EdgeInsets.all(10),
-                child: const Row(children: [
-                  Expanded(
-                      flex: 2,
-                      child: Text("CATEGORIA",
-                          style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(
-                      child: Text("BRUTO",
-                          style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(
-                      child: Text("INSS",
-                          style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(
-                      child: Text("IRRF",
-                          style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(
-                      child: Text("T. DESC.",
-                          style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(
-                      child: Text("ACRÉSC.",
-                          style: TextStyle(fontWeight: FontWeight.bold))),
-                  Expanded(
-                      child: Text("LÍQUIDO",
-                          style: TextStyle(fontWeight: FontWeight.bold))),
-                ]),
+                child: Row(
+                  children: [
+                    Expanded(flex: 2, child: Text("CATEGORIA", style: TextStyle(fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black87))),
+                    Expanded(child: Text("BRUTO", style: TextStyle(fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black87))),
+                    Expanded(child: Text("INSS", style: TextStyle(fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black87))),
+                    Expanded(child: Text("IRRF", style: TextStyle(fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black87))),
+                    Expanded(child: Text("T. DESC.", style: TextStyle(fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black87))),
+                    Expanded(child: Text("ACRÉSC.", style: TextStyle(fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black87))),
+                    Expanded(child: Text("LÍQUIDO", style: TextStyle(fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black87))),
+                  ],
+                ),
               ),
               const Divider(),
               linhaTabela("Folha Efetivos (${efetivos.length})", sEfetivos),
               const Divider(),
-              linhaTabela("Folha Comissionados (${comissionados.length})",
-                  sComissionados),
+              linhaTabela("Folha Comissionados (${comissionados.length})", sComissionados),
               const Divider(),
               linhaTabela("Folha Cedidos (${cedidos.length})", sCedidos),
               const Divider(),
-              linhaTabela(
-                  "Folha Estagiários (${estagiarios.length})", sEstagiarios),
+              linhaTabela("Folha Estagiários (${estagiarios.length})", sEstagiarios),
               const Divider(thickness: 2),
               linhaTabela(
-                  "TOTAL GERAL",
-                  {
-                    'bruto': (sEfetivos['bruto']! +
-                        sComissionados['bruto']! +
-                        sCedidos['bruto']! +
-                        sEstagiarios['bruto']!),
-                    'inss': (sEfetivos['inss']! +
-                        sComissionados['inss']! +
-                        sCedidos['inss']! +
-                        sEstagiarios['inss']!),
-                    'irrf': (sEfetivos['irrf']! +
-                        sComissionados['irrf']! +
-                        sCedidos['irrf']! +
-                        sEstagiarios['irrf']!),
-                    'pensao': (sEfetivos['pensao']! +
-                        sComissionados['pensao']! +
-                        sCedidos['pensao']! +
-                        sEstagiarios['pensao']!),
-                    'outros': (sEfetivos['outros']! +
-                        sComissionados['outros']! +
-                        sCedidos['outros']! +
-                        sEstagiarios['outros']!),
-                    'acrescimos': (sEfetivos['acrescimos']! +
-                        sComissionados['acrescimos']! +
-                        sCedidos['acrescimos']! +
-                        sEstagiarios['acrescimos']!),
-                    'liquido': (sEfetivos['liquido']! +
-                        sComissionados['liquido']! +
-                        sCedidos['liquido']! +
-                        sEstagiarios['liquido']!),
-                  },
-                  isTotal: true),
+                "TOTAL GERAL",
+                {
+                  'bruto': (sEfetivos['bruto']! + sComissionados['bruto']! + sCedidos['bruto']! + sEstagiarios['bruto']!),
+                  'inss': (sEfetivos['inss']! + sComissionados['inss']! + sCedidos['inss']! + sEstagiarios['inss']!),
+                  'irrf': (sEfetivos['irrf']! + sComissionados['irrf']! + sCedidos['irrf']! + sEstagiarios['irrf']!),
+                  'pensao': (sEfetivos['pensao']! + sComissionados['pensao']! + sCedidos['pensao']! + sEstagiarios['pensao']!),
+                  'outros': (sEfetivos['outros']! + sComissionados['outros']! + sCedidos['outros']! + sEstagiarios['outros']!),
+                  'acrescimos': (sEfetivos['acrescimos']! + sComissionados['acrescimos']! + sCedidos['acrescimos']! + sEstagiarios['acrescimos']!),
+                  'liquido': (sEfetivos['liquido']! + sComissionados['liquido']! + sCedidos['liquido']! + sEstagiarios['liquido']!),
+                },
+                isTotal: true,
+              ),
             ],
           ),
         ),
@@ -671,22 +645,21 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text("Fechar"))
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Fechar"),
+          )
         ],
       ),
     );
   }
 
   void _mostrarDetalhesCalculo(String nome, Map<String, dynamic> calc) {
-    // Extraindo valores para facilitar o uso
     double sipes = calc['sipes'] ?? 0.0;
     double convenio = calc['base_convenio'] ?? 0.0;
     double global = calc['base_global_bruta'] ?? 0.0;
-
     double inssTotal = calc['inss_total'] ?? 0.0;
     double inssSipes = calc['inss_sipes'] ?? 0.0;
     double inssFinal = calc['inss'] ?? 0.0;
-
     double baseIrrf = calc['base_irrf'] ?? 0.0;
     double irrfTotal = calc['irrf_total'] ?? 0.0;
     double irrfSipes = calc['irrf_sipes'] ?? 0.0;
@@ -698,12 +671,13 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
+        backgroundColor: _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            const Icon(Icons.analytics_outlined, color: Color(0xFF0D47A1)),
+            const Icon(Icons.analytics_outlined, color: Color(0xFF1E88E5)),
             const SizedBox(width: 10),
-            Expanded(child: Text("Memória de Cálculo: $nome")),
+            Expanded(child: Text("Memória de Cálculo: $nome", style: TextStyle(color: _isDarkMode ? Colors.white : Colors.black87))),
           ],
         ),
         content: SizedBox(
@@ -716,17 +690,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 _buildDestaqueValores("Base Bruta Global", global,
                     "Soma: ${_formatMoeda(sipes)} (SIPES) + ${_formatMoeda(convenio)} (Convênio)"),
                 const SizedBox(height: 20),
-                
-                // SEÇÃO INSS
                 _buildHeaderSecao("INSS - Previdência", Icons.security, Colors.blue),
                 _buildItemCalculo("INSS Total (sobre Global)", inssTotal),
                 _buildItemCalculo("(-) INSS já pago no SIPES", inssSipes, isDeducao: true),
                 const Divider(),
                 _buildItemResultado("INSS a descontar nesta folha", inssFinal, Colors.blue),
-                
                 const SizedBox(height: 24),
-                
-                // SEÇÃO IRRF
                 _buildHeaderSecao("IRRF - Imposto de Renda", Icons.request_quote, Colors.red),
                 _buildItemCalculo("Base de Cálculo IRRF", baseIrrf, info: "Bruto - INSS Total - Pensão"),
                 if (isentoIrrf2026)
@@ -738,23 +707,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (redutorIrrf > 0)
                     _buildItemCalculo("IRRF Total Global", irrfTotal, info: "Imposto após aplicação do redutor"),
                 ],
-                _buildItemCalculo(
-                  "(-) IRRF já pago no SIPES", 
-                  irrfSipes, 
-                  isDeducao: true,
-                  info: irrfManualInformado ? "Diferença inferida a partir do valor manual" : "Valor calculado"
-                ),
+                _buildItemCalculo("(-) IRRF já pago no SIPES", irrfSipes, isDeducao: true, info: irrfManualInformado ? "Diferença do valor manual" : "Valor calculado"),
                 const Divider(),
-                _buildItemResultado(
-                  "IRRF a descontar nesta folha", 
-                  irrfFinal, 
-                  irrfManualInformado ? Colors.orange : Colors.red,
-                  info: irrfManualInformado ? "Valor digitado manualmente no formulário" : null
-                ),
-
+                _buildItemResultado("IRRF a descontar nesta folha", irrfFinal, irrfManualInformado ? Colors.orange : Colors.red, info: irrfManualInformado ? "Valor digitado manualmente" : null),
                 const SizedBox(height: 24),
-                
-                // RESUMO LÍQUIDO
                 _buildHeaderSecao("Líquido do Convênio", Icons.wallet, Colors.green),
                 _buildItemCalculo("Valor Bruto do Convênio", convenio),
                 _buildItemCalculo("(-) INSS a descontar", inssFinal, isDeducao: true),
@@ -762,15 +718,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 _buildItemCalculo("(-) Pensão/Outros", (calc['pensao'] ?? 0) + (calc['outros'] ?? 0), isDeducao: true),
                 _buildItemCalculo("(+) Acréscimos", calc['acrescimos'] ?? 0),
                 const Divider(thickness: 2),
-                _buildItemResultado("VALOR LÍQUIDO A RECEBER", calc['liquido'] ?? 0.0, Colors.green[800]!),
-                
-                const SizedBox(height: 16),
-                const Center(
-                  child: Text(
-                    "* Valores sincronizados com a tabela 2026 do Excel.",
-                    style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Colors.grey),
-                  ),
-                ),
+                _buildItemResultado("VALOR LÍQUIDO A RECEBER", calc['liquido'] ?? 0.0, Colors.green[400]!),
               ],
             ),
           ),
@@ -789,18 +737,18 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: _isDarkMode ? const Color(0xFF2C2C2C) : Colors.grey[100],
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[300]!),
+        border: Border.all(color: _isDarkMode ? Colors.grey[800]! : Colors.grey[300]!),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          Text(_formatMoeda(valor), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black)),
+          Text(_formatMoeda(valor), style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black)),
           const SizedBox(height: 4),
-          Text(sub, style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+          Text(sub, style: TextStyle(fontSize: 11, color: _isDarkMode ? Colors.grey : Colors.grey[700])),
         ],
       ),
     );
@@ -828,13 +776,13 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(label, style: const TextStyle(fontSize: 13, color: Colors.black87)),
+              Text(label, style: TextStyle(fontSize: 13, color: _isDarkMode ? Colors.white.withValues(alpha: 0.87) : Colors.black87)),
               Text(
                 "${isDeducao ? '-' : ''} ${_formatMoeda(valor)}",
                 style: TextStyle(
-                  fontSize: 13, 
-                  color: isDeducao ? Colors.red[700] : Colors.black,
-                  fontFamily: 'monospace'
+                  fontSize: 13,
+                  color: isDeducao ? Colors.red[300] : (_isDarkMode ? Colors.white : Colors.black),
+                  fontFamily: 'monospace',
                 ),
               ),
             ],
@@ -853,25 +801,511 @@ class _HomeScreenState extends State<HomeScreen> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+            Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _isDarkMode ? Colors.white : Colors.black87)),
             Text(_formatMoeda(valor), style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: color)),
           ],
         ),
         if (info != null)
           Text(info, style: const TextStyle(fontSize: 10, color: Colors.grey, fontStyle: FontStyle.italic)),
-      ]
+      ],
     );
   }
 
+  // --- CONTROLES DE COR COM BASE NO TEMA ---
+  Color get _corFundo => _isDarkMode ? const Color(0xFF121212) : const Color(0xFFF5F7FA);
+  Color get _corCard => _isDarkMode ? const Color(0xFF1E1E1E) : Colors.white;
+  Color get _corTexto => _isDarkMode ? Colors.white : Colors.black87;
+  Color get _corSubTexto => _isDarkMode ? Colors.white60 : Colors.grey[700]!;
+
   @override
   Widget build(BuildContext context) {
-    if (_isLoading)
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (_isLoading) {
+      return Scaffold(
+        backgroundColor: _corFundo,
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
 
+    return Scaffold(
+      backgroundColor: _corFundo,
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. LEFT SIDEBAR MENU
+          _buildLeftSidebar(),
+          // 2. MAIN BODY WRAPPER
+          Expanded(
+            child: Column(
+              children: [
+                // TOP BAR (Premium actions)
+                _buildTopBar(),
+                // ACTIVE TAB VIEW
+                Expanded(
+                  child: _buildSelectedTabContent(),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- CONSTRUÇÃO DO MENU LATERAL COMPACTO E PREMIUM ---
+  Widget _buildLeftSidebar() {
+    return Container(
+      width: 250,
+      decoration: BoxDecoration(
+        color: _isDarkMode ? const Color(0xFF0F172A) : const Color(0xFF0D47A1),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 10,
+            offset: Offset(2, 0),
+          )
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Logo & Título
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.calculate, color: Colors.white, size: 28),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "Folha ITPS",
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18, letterSpacing: 0.5),
+                      ),
+                      Text(
+                        "RH & Financeiro",
+                        style: TextStyle(color: Colors.white60, fontSize: 10),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: Colors.white24, height: 1),
+          const SizedBox(height: 16),
+          // Itens de Menu
+          _buildMenuItem(0, "Dashboard", Icons.dashboard_outlined),
+          _buildMenuItem(1, "Colaboradores", Icons.people_outline),
+          _buildMenuItem(2, "Histórico & Fechamento", Icons.history_edu),
+          _buildMenuItem(3, "Trilha de Auditoria", Icons.security),
+          const Spacer(),
+          // Logout / User Info
+          const Divider(color: Colors.white24, height: 1),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: Colors.white24,
+                      radius: 16,
+                      child: Text(
+                        widget.userData['usuario'].toString().isNotEmpty ? widget.userData['usuario'][0].toUpperCase() : '?',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.userData['usuario'].toString().toUpperCase(),
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            widget.userData['permissao'].toString().toUpperCase(),
+                            style: const TextStyle(color: Colors.white54, fontSize: 9),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(builder: (_) => const LoginScreen()),
+                    );
+                  },
+                  icon: const Icon(Icons.logout, size: 14),
+                  label: const Text("Sair do Sistema"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white24,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    minimumSize: const Size(double.infinity, 36),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMenuItem(int tabIndex, String label, IconData icone) {
+    final bool isSelected = _activeTab == tabIndex;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _activeTab = tabIndex;
+            _mostrarFormulario = false; // fecha o form ao trocar de aba
+          });
+        },
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: isSelected ? Colors.white.withValues(alpha: 0.15) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Icon(icone, color: isSelected ? Colors.white : Colors.white70, size: 20),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: isSelected ? Colors.white : Colors.white70,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    fontSize: 13.5,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- CONSTRUÇÃO DA TOP BAR ---
+  Widget _buildTopBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+      decoration: BoxDecoration(
+        color: _corCard,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          )
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _activeTab == 0
+                    ? "Dashboard Geral"
+                    : (_activeTab == 1
+                        ? "Painel de Colaboradores"
+                        : (_activeTab == 2 ? "Histórico & Fechamento Mensal" : "Auditoria de Ações")),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: _corTexto),
+              ),
+              Text(
+                "Sincronização de Rede: Sincronizado silenciosamente a cada 15 segundos",
+                style: TextStyle(color: _corSubTexto.withValues(alpha: 0.7), fontSize: 11),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              // Botões originais adaptados
+              FilledButton.icon(
+                onPressed: _mostrarRelatorioNaTela,
+                icon: const Icon(Icons.analytics, size: 16),
+                label: const Text("Resumo Geral"),
+                style: FilledButton.styleFrom(backgroundColor: Colors.orange[800], foregroundColor: Colors.white),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: _exportarExcel,
+                icon: const Icon(Icons.file_download, size: 16),
+                label: const Text("Exportar Excel"),
+                style: FilledButton.styleFrom(backgroundColor: Colors.green[700], foregroundColor: Colors.white),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ConfigScreen(data: _configData!, onSave: _refreshTudo, userData: widget.userData),
+                  ),
+                ),
+                icon: const Icon(Icons.settings, size: 16),
+                label: const Text("Ajustar Parâmetros"),
+                style: FilledButton.styleFrom(
+                  backgroundColor: _isDarkMode ? Colors.grey[800] : Colors.blueGrey[700],
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- SELECIONA O CONTEÚDO DO TAMPÃO ATIVO ---
+  Widget _buildSelectedTabContent() {
+    switch (_activeTab) {
+      case 0:
+        return _buildDashboardTab();
+      case 1:
+        return _buildColaboradoresTab();
+      case 2:
+        return _buildFechamentoTab();
+      case 3:
+        return _buildAuditoriaTab();
+      default:
+        return _buildDashboardTab();
+    }
+  }
+
+  // ==========================================
+  // 📊 TAB 1: DASHBOARD VISUAL PREMIUM
+  // ==========================================
+  Widget _buildDashboardTab() {
+    double totalBrutoGeral = 0;
+    double totalInss = 0;
+    double totalIrrf = 0;
+    double totalLiquido = 0;
+    double totalDescontos = 0;
+
+    Map<String, double> dadosSetores = {};
+
+    for (var f in _funcionarios) {
+      final calc = CalculadoraTaxas.calcularFolha(
+        percentual: f['percentual'],
+        valorSipes: f['valor_sipes'],
+        pensao: f['pensao'] ?? 0.0,
+        outros: f['outros'] ?? 0.0,
+        acrescimos: f['acrescimos'] ?? 0.0,
+        temInss: f['tem_inss'] == 1,
+        temIrrf: f['tem_irrf'] == 1,
+        configData: _configData!,
+        irrfManual: f['irrf_manual'] ?? 0.0,
+        irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
+      );
+
+      double bruto = calc['bruto'] ?? 0.0;
+      double inss = calc['inss'] ?? 0.0;
+      double irrf = calc['irrf'] ?? 0.0;
+      double liq = calc['liquido'] ?? 0.0;
+      double desc = inss + irrf + (f['pensao'] ?? 0.0) + (f['outros'] ?? 0.0);
+
+      totalBrutoGeral += bruto;
+      totalInss += inss;
+      totalIrrf += irrf;
+      totalDescontos += desc;
+      totalLiquido += liq;
+
+      // Gastos por setor
+      String setor = f['locacao'] ?? 'Sem Setor';
+      dadosSetores[setor] = (dadosSetores[setor] ?? 0.0) + bruto;
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. CARDS DE MÉTRICAS COM GRADIENTES MODERNOS
+          Row(
+            children: [
+              Expanded(
+                child: _buildMetricCardPremium(
+                  "Total Bruto Convênio",
+                  totalBrutoGeral,
+                  Icons.monetization_on,
+                  [const Color(0xFF1E3A8A), const Color(0xFF3B82F6)],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildMetricCardPremium(
+                  "Retenções Previdenciárias",
+                  totalInss,
+                  Icons.security,
+                  [const Color(0xFF7F1D1D), const Color(0xFFEF4444)],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildMetricCardPremium(
+                  "Imposto de Renda",
+                  totalIrrf,
+                  Icons.request_quote,
+                  [const Color(0xFFB45309), const Color(0xFFF59E0B)],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildMetricCardPremium(
+                  "Desembolso Líquido",
+                  totalLiquido,
+                  Icons.payments,
+                  [const Color(0xFF065F46), const Color(0xFF10B981)],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          // 2. GRÁFICOS LADO A LADO
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Doughnut Chart (Setores)
+              Expanded(
+                flex: 5,
+                child: Card(
+                  color: _corCard,
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          "Despesas por Lotação / Setor",
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: _corTexto),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          height: 230,
+                          child: GraficoSetores(dadosSetores: dadosSetores, isDarkMode: _isDarkMode),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 24),
+              // Bar Chart (Bruto vs Liquido)
+              Expanded(
+                flex: 4,
+                child: Card(
+                  color: _corCard,
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: SizedBox(
+                      height: 270,
+                      child: GraficoBarrasComparativo(
+                        valorBruto: totalBrutoGeral,
+                        valorLiquido: totalLiquido,
+                        valorDescontos: totalDescontos,
+                        isDarkMode: _isDarkMode,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricCardPremium(String rotulo, double valor, IconData icone, List<Color> gradient) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: gradient,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: gradient[1].withValues(alpha: 0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          )
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  rotulo.toUpperCase(),
+                  style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _formatMoeda(valor),
+                  style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icone, color: Colors.white, size: 26),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================
+  // 👥 TAB 2: ORIGINAL COLABORADORES TABLE VIEW
+  // ==========================================
+  Widget _buildColaboradoresTab() {
     double totalBrutoGeral = 0;
     double baseConvenio = _configData!['geral']['base_convenio'] ?? 210000.00;
-    double aliquotaPatronal =
-        _configData!['geral']['aliquota_patronal'] ?? 9.02;
+    double aliquotaPatronal = _configData!['geral']['aliquota_patronal'] ?? 9.02;
 
     final List<DataRow> rows = [];
 
@@ -886,740 +1320,862 @@ class _HomeScreenState extends State<HomeScreen> {
         temIrrf: f['tem_irrf'] == 1,
         configData: _configData!,
         irrfManual: f['irrf_manual'] ?? 0.0,
-        irrfSipesReal: f['irrf_sipes_real'] ?? 0.0, // fallback
+        irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
       );
 
       totalBrutoGeral += calc['bruto'] ?? 0.0;
 
-      rows.add(DataRow(cells: [
-        DataCell(Row(children: [
-          CircleAvatar(
-              backgroundColor: Colors.grey.shade200,
+      rows.add(DataRow(
+        color: WidgetStateProperty.resolveWith<Color?>((states) {
+          if (_isDarkMode) {
+            return rows.length % 2 == 0 ? const Color(0xFF242424) : const Color(0xFF1E1E1E);
+          }
+          return rows.length % 2 == 0 ? Colors.grey[50] : Colors.white;
+        }),
+        cells: [
+          DataCell(Row(children: [
+            CircleAvatar(
+              backgroundColor: _isDarkMode ? Colors.grey[800] : Colors.grey.shade200,
               radius: 12,
               child: Text(
-                  f['nome'].isNotEmpty ? f['nome'][0].toUpperCase() : '?',
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.bold))),
-          const SizedBox(width: 8),
-          Text(f['nome'], style: const TextStyle(fontWeight: FontWeight.w600)),
-        ])),
-        DataCell(Text(f['cpf'] ?? '-',
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 13))),
-        DataCell(
-            Text(f['rg'] ?? '-', style: const TextStyle(color: Colors.grey))),
-        DataCell(Text(f['banco'] ?? '-')),
-        DataCell(Text(f['agencia'] ?? '-')),
-        DataCell(Text(f['conta'] ?? '-')),
-        DataCell(Column(
+                f['nome'].isNotEmpty ? f['nome'][0].toUpperCase() : '?',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _corTexto),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(f['nome'], style: TextStyle(fontWeight: FontWeight.w600, color: _corTexto)),
+          ])),
+          DataCell(Text(f['cpf'] ?? '-', style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: _corTexto))),
+          DataCell(Text(f['rg'] ?? '-', style: TextStyle(color: _corSubTexto))),
+          DataCell(Text(f['banco'] ?? '-', style: TextStyle(color: _corTexto))),
+          DataCell(Text(f['agencia'] ?? '-', style: TextStyle(color: _corTexto))),
+          DataCell(Text(f['conta'] ?? '-', style: TextStyle(color: _corTexto))),
+          DataCell(Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(f['cargo_nome'] ?? '-',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 13)),
-              Text(f['locacao'] ?? '-',
-                  style: TextStyle(fontSize: 11, color: Colors.grey[700])),
-            ])),
-        DataCell(Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
+              Text(f['cargo_nome'] ?? '-', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _corTexto)),
+              Text(f['locacao'] ?? '-', style: TextStyle(fontSize: 11, color: _corSubTexto)),
+            ],
+          )),
+          DataCell(Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
               color: f['vinculo'] == 'Efetivo'
-                  ? Colors.blue[50]
+                  ? Colors.blue.withValues(alpha: 0.1)
                   : (f['vinculo'] == 'Comissionado'
-                      ? Colors.green[50]
+                      ? Colors.green.withValues(alpha: 0.1)
                       : (f['vinculo'] == 'Estagiário'
-                          ? Colors.purple[50]
-                          : Colors.orange[50])),
+                          ? Colors.purple.withValues(alpha: 0.1)
+                          : Colors.orange.withValues(alpha: 0.1))),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                  color: f['vinculo'] == 'Efetivo'
-                      ? Colors.blue.shade200
-                      : (f['vinculo'] == 'Comissionado'
-                          ? Colors.green.shade200
-                          : (f['vinculo'] == 'Estagiário'
-                              ? Colors.purple.shade200
-                              : Colors.orange.shade200)))),
-          child: Text(f['vinculo'] ?? '-',
-              style:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
-        )),
-        DataCell(Text(_formatMoeda(f['valor_sipes']),
-            style: const TextStyle(color: Colors.grey))),
-        DataCell(Text("${f['percentual']}%",
-            style: const TextStyle(fontWeight: FontWeight.bold))),
-        DataCell(Text(_formatMoeda(calc['bruto']),
-            style: const TextStyle(
-                fontWeight: FontWeight.bold, color: Colors.blue))),
-        DataCell(Text(f['tem_inss'] == 1 ? _formatMoeda(calc['inss']) : "-",
-            style: TextStyle(color: Colors.red[700]))),
-        DataCell(Text(f['tem_irrf'] == 1 ? _formatMoeda(calc['irrf']) : "-",
-            style: TextStyle(color: Colors.red[700]))),
-        DataCell(Text(_formatMoeda(f['pensao']),
-            style: TextStyle(color: Colors.orange[800]))),
-        DataCell(Text(_formatMoeda(f['outros']),
-            style: TextStyle(color: Colors.orange[800]))),
-        DataCell(Text(_formatMoeda(f['acrescimos']),
-            style: TextStyle(color: Colors.green[600]))),
-        DataCell(Text(_formatMoeda(calc['liquido']),
-            style: const TextStyle(
-                color: Color(0xFF00695C), fontWeight: FontWeight.w900))),
-        DataCell(Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
+                color: f['vinculo'] == 'Efetivo'
+                    ? Colors.blue.shade300
+                    : (f['vinculo'] == 'Comissionado'
+                        ? Colors.green.shade300
+                        : (f['vinculo'] == 'Estagiário'
+                            ? Colors.purple.shade300
+                            : Colors.orange.shade300)),
+              ),
+            ),
+            child: Text(
+              f['vinculo'] ?? '-',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: f['vinculo'] == 'Efetivo'
+                    ? Colors.blue[300]
+                    : (f['vinculo'] == 'Comissionado'
+                        ? Colors.green[300]
+                        : (f['vinculo'] == 'Estagiário'
+                            ? Colors.purple[300]
+                            : Colors.orange[300])),
+              ),
+            ),
+          )),
+          DataCell(Text(_formatMoeda(f['valor_sipes']), style: TextStyle(color: _corSubTexto))),
+          DataCell(Text("${f['percentual']}%", style: TextStyle(fontWeight: FontWeight.bold, color: _corTexto))),
+          DataCell(Text(_formatMoeda(calc['bruto']), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue))),
+          DataCell(Text(f['tem_inss'] == 1 ? _formatMoeda(calc['inss']) : "-", style: TextStyle(color: Colors.red[300]))),
+          DataCell(Text(f['tem_irrf'] == 1 ? _formatMoeda(calc['irrf']) : "-", style: TextStyle(color: Colors.red[300]))),
+          DataCell(Text(_formatMoeda(f['pensao']), style: TextStyle(color: Colors.orange[300]))),
+          DataCell(Text(_formatMoeda(f['outros']), style: TextStyle(color: Colors.orange[300]))),
+          DataCell(Text(_formatMoeda(f['acrescimos']), style: TextStyle(color: Colors.green[300]))),
+          DataCell(Text(_formatMoeda(calc['liquido']), style: const TextStyle(color: Color(0xFF26A69A), fontWeight: FontWeight.w900))),
+          DataCell(Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
                 icon: const Icon(Icons.info_outline, color: Colors.grey),
                 tooltip: "Ver Detalhes do Cálculo",
-                onPressed: () => _mostrarDetalhesCalculo(f['nome'], calc)),
-            if (widget.userData['permissao'] != 'leitura') ...[
+                onPressed: () => _mostrarDetalhesCalculo(f['nome'], calc),
+              ),
               IconButton(
-                  icon: const Icon(Icons.edit_outlined,
-                      color: Colors.blue, size: 20),
+                icon: const Icon(Icons.picture_as_pdf, color: Colors.amber),
+                tooltip: "Imprimir Holerite (PDF)",
+                onPressed: () async {
+                  await DatabaseHelper.instance.registrarLog(widget.userData['usuario'], 'IMPRIMIR_HOLERITE', 'Gerou PDF do holerite para: ${f['nome']}');
+                  await GeradorPdf.gerarEImprimirHolerite(f, calc, DateFormat('MM/yyyy').format(DateTime.now()));
+                },
+              ),
+              if (widget.userData['permissao'] != 'leitura') ...[
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined, color: Colors.blue, size: 20),
                   onPressed: () => _carregarParaEdicao(f),
-                  tooltip: "Editar"),
-              IconButton(
-                  icon: const Icon(Icons.delete_outline,
-                      color: Colors.red, size: 20),
+                  tooltip: "Editar",
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
                   onPressed: () async {
-                    await DatabaseHelper.instance.deleteFuncionario(f['id']);
-                    _refreshTudo();
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        backgroundColor: _corCard,
+                        title: Text("Remover Colaborador?", style: TextStyle(color: _corTexto)),
+                        content: Text("Tem certeza que deseja remover ${f['nome']}?", style: TextStyle(color: _corTexto)),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancelar")),
+                          TextButton(
+                            onPressed: () async {
+                              Navigator.pop(ctx);
+                              await DatabaseHelper.instance.deleteFuncionario(f['id'], usuario: widget.userData['usuario']);
+                              _mostrarSnackPremium("Colaborador removido!", Icons.delete, Colors.red);
+                              _refreshTudo();
+                            },
+                            child: const Text("Sim, Remover", style: TextStyle(color: Colors.red)),
+                          ),
+                        ],
+                      ),
+                    );
                   },
-                  tooltip: "Remover"),
+                  tooltip: "Remover",
+                ),
+              ],
             ],
-          ],
-        )),
-      ]));
+          )),
+        ],
+      ));
     }
 
     double valorPatronal = totalBrutoGeral * (aliquotaPatronal / 100);
     double totalRetirada = totalBrutoGeral + valorPatronal;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        elevation: 2,
-        title: const Row(children: [
-          Icon(Icons.table_chart, size: 28),
-          SizedBox(width: 10),
-          Text('Sistema Folha ITPS',
-              style: TextStyle(fontWeight: FontWeight.bold))
-        ]),
-        backgroundColor: const Color(0xFF0D47A1),
-        foregroundColor: Colors.white,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(widget.userData['usuario'].toString().toUpperCase(),
-                    style: const TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.bold)),
-                Text(widget.userData['permissao'],
-                    style: const TextStyle(fontSize: 10, color: Colors.white70)),
-              ],
-            ),
+    return Column(
+      children: [
+        // Mini Info Panel
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          decoration: BoxDecoration(
+            color: _corCard,
+            border: Border(bottom: BorderSide(color: _isDarkMode ? Colors.grey[800]! : Colors.grey[200]!)),
           ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: "Sair",
-            onPressed: () {
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
-              );
-            },
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildMiniInfoBox("Total Bruto Geral", totalBrutoGeral, Colors.blue),
+              _buildMiniInfoBox("Base do Mês", baseConvenio, Colors.grey),
+              _buildMiniInfoBox("RAT / Patronal ($aliquotaPatronal%)", valorPatronal, Colors.orange),
+              _buildMiniInfoBox("Retirada Total", totalRetirada, Colors.green),
+            ],
           ),
-          const VerticalDivider(color: Colors.white24, indent: 12, endIndent: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: FilledButton.icon(
-              onPressed: _mostrarRelatorioNaTela,
-              icon: const Icon(Icons.analytics, size: 18),
-              label: const Text("Resumo"),
-              style: FilledButton.styleFrom(
-                  backgroundColor: Colors.orange[800],
-                  foregroundColor: Colors.white),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: FilledButton.icon(
-              onPressed: _exportarExcel,
-              icon: const Icon(Icons.file_download, size: 18),
-              label: const Text("Excel"),
-              style: FilledButton.styleFrom(
-                  backgroundColor: Colors.green[700],
-                  foregroundColor: Colors.white),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: FilledButton.icon(
-              onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => ConfigScreen(
-                          data: _configData!, onSave: _refreshTudo, userData: widget.userData))),
-              icon: const Icon(Icons.settings, size: 18),
-              label: const Text("Config."),
-              style: FilledButton.styleFrom(
-                  backgroundColor: Colors.white.withValues(alpha: 0.2),
-                  foregroundColor: Colors.white),
-            ),
-          )
-        ],
-      ),
-
-      // BOTÃO FLUTUANTE PARA ABRIR O FORMULÁRIO
-      floatingActionButton: (!_mostrarFormulario &&
-              widget.userData['permissao'] != 'leitura')
-          ? FloatingActionButton(
-              heroTag: null,
-              onPressed: () {
-                _limparForm();
-                setState(() => _mostrarFormulario = true);
-              },
-              backgroundColor: const Color(0xFF0D47A1),
-              child: const Icon(Icons.person_add, color: Colors.white),
-            )
-          : null,
-
-      body: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: Colors.white, boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 5,
-                  offset: const Offset(0, 2))
-            ]),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _buildInfoCard("Base Convênio", baseConvenio,
-                    Icons.account_balance, Colors.grey),
-                _buildInfoCard("Total Bruto", totalBrutoGeral,
-                    Icons.attach_money, Colors.blue,
-                    isBold: true),
-                _buildInfoCard("Patronal/RAT ($aliquotaPatronal%)",
-                    valorPatronal, Icons.business, Colors.orange),
-                _buildInfoCard("Retirada Total", totalRetirada,
-                    Icons.account_balance_wallet, Colors.green,
-                    isBold: true),
-              ],
-            ),
-          ),
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Formulário Lateral Condicional
-                if (_mostrarFormulario)
-                  Container(
-                    width: 380,
-                    padding: const EdgeInsets.all(16),
-                    child: Card(
-                      elevation: 4,
-                      shadowColor: Colors.black26,
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Form(
-                          key: _formKey,
-                          child: Column(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.only(bottom: 16),
-                                decoration: const BoxDecoration(
-                                    border: Border(
-                                        bottom:
-                                            BorderSide(color: Colors.black12))),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                        _editingId != null
-                                            ? "Editar"
-                                            : "Novo Cadastro",
-                                        style: TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.bold,
-                                            color: _editingId != null
-                                                ? Colors.orange[800]
-                                                : const Color(0xFF0D47A1))),
-                                    IconButton(
-                                        icon: const Icon(Icons.close),
-                                        onPressed: () {
-                                          _limparForm();
-                                          setState(
-                                              () => _mostrarFormulario = false);
-                                        },
-                                        tooltip: "Fechar")
-                                  ],
-                                ),
-                              ),
-                              Expanded(
-                                child: ListView(
-                                  // CORREÇÃO: padding right 16 para a scrollbar
-                                  padding:
-                                      const EdgeInsets.only(top: 16, right: 16),
-                                  children: [
-                                    TextFormField(
-                                        controller: _nomeCtrl,
-                                        decoration: const InputDecoration(
-                                            labelText: "Nome Completo",
-                                            prefixIcon: Icon(Icons.person)),
-                                        validator: (v) =>
-                                            v!.isEmpty ? 'Obrigatório' : null),
-                                    const SizedBox(height: 12),
-                                    Row(children: [
-                                      Expanded(
-                                          child: TextFormField(
-                                              controller: _cpfCtrl,
-                                              keyboardType:
-                                                  TextInputType.number,
-                                              inputFormatters: [
-                                                CpfInputFormatter()
-                                              ],
-                                              decoration: const InputDecoration(
-                                                  labelText: "CPF",
-                                                  prefixIcon: Icon(Icons.badge),
-                                                  hintText: "000.000.000-00"))),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                          child: TextFormField(
-                                              controller: _rgCtrl,
-                                              decoration: const InputDecoration(
-                                                  labelText: "RG"))),
-                                    ]),
-                                    const SizedBox(height: 12),
-                                    DropdownButtonFormField<String>(
-                                      value: _vinculoSelecionado,
-                                      decoration: const InputDecoration(
-                                          labelText: "Vínculo",
-                                          prefixIcon: Icon(Icons.work)),
-                                      items: [
-                                        'Efetivo',
-                                        'Comissionado',
-                                        'Cedido',
-                                        'Estagiário'
-                                      ]
-                                          .map((e) => DropdownMenuItem(
-                                              value: e, child: Text(e)))
-                                          .toList(),
-                                      onChanged: _onVinculoChanged,
+        ),
+        // Sheet & Grid Layout
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Lateral Form (Conditional)
+              if (_mostrarFormulario)
+                Container(
+                  width: 420,
+                  padding: const EdgeInsets.all(16),
+                  child: Card(
+                    color: _corCard,
+                    elevation: 4,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: _isDarkMode ? Colors.grey[800]! : Colors.black12))),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    _editingId != null ? "Editar" : "Novo Cadastro",
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: _editingId != null ? Colors.orange[800] : const Color(0xFF0D47A1),
                                     ),
-                                    const SizedBox(height: 12),
-                                    TextFormField(
-                                        controller: _bancoCtrl,
-                                        decoration: const InputDecoration(
-                                            labelText: "Banco",
-                                            prefixIcon:
-                                                Icon(Icons.account_balance))),
-                                    const SizedBox(height: 12),
-                                    Row(children: [
+                                  ),
+                                  IconButton(
+                                    icon: Icon(Icons.close, color: _corTexto),
+                                    onPressed: () {
+                                      _limparForm();
+                                      setState(() => _mostrarFormulario = false);
+                                    },
+                                    tooltip: "Fechar",
+                                  )
+                                ],
+                              ),
+                            ),
+                            Expanded(
+                              child: ListView(
+                                padding: const EdgeInsets.only(top: 16, right: 16),
+                                children: [
+                                  _buildFormSectionHeader("Dados Pessoais", Icons.person_outline),
+                                  TextFormField(
+                                    controller: _nomeCtrl,
+                                    style: TextStyle(color: _corTexto),
+                                    decoration: const InputDecoration(labelText: "Nome Completo", prefixIcon: Icon(Icons.person)),
+                                    validator: (v) => v!.isEmpty ? 'Obrigatório' : null,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
                                       Expanded(
-                                          child: TextFormField(
-                                              controller: _agenciaCtrl,
-                                              decoration: const InputDecoration(
-                                                  labelText: "Agência"))),
+                                        child: TextFormField(
+                                          controller: _cpfCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          keyboardType: TextInputType.number,
+                                          inputFormatters: [CpfInputFormatter()],
+                                          decoration: const InputDecoration(labelText: "CPF", prefixIcon: Icon(Icons.badge), hintText: "000.000.000-00"),
+                                        ),
+                                      ),
                                       const SizedBox(width: 8),
                                       Expanded(
-                                          child: TextFormField(
-                                              controller: _contaCtrl,
-                                              decoration: const InputDecoration(
-                                                  labelText: "Conta"))),
-                                    ]),
-                                    const Padding(
-                                        padding:
-                                            EdgeInsets.symmetric(vertical: 16),
-                                        child: Divider()),
-                                    DropdownButtonFormField<int>(
-                                      initialValue: _selectedCargoId,
-                                      isExpanded: true,
-                                      decoration: const InputDecoration(
-                                          labelText: "Selecionar Cargo (Lista)",
-                                          prefixIcon: Icon(Icons.list_alt)),
-                                      items: _cargos
-                                          .map((c) => DropdownMenuItem<int>(
+                                        child: TextFormField(
+                                          controller: _rgCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          decoration: const InputDecoration(labelText: "RG"),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  DropdownButtonFormField<String>(
+                                    value: _vinculoSelecionado,
+                                    dropdownColor: _corCard,
+                                    style: TextStyle(color: _corTexto),
+                                    decoration: const InputDecoration(labelText: "Vínculo", prefixIcon: Icon(Icons.work)),
+                                    items: ['Efetivo', 'Comissionado', 'Cedido', 'Estagiário']
+                                        .map((e) => DropdownMenuItem(value: e, child: Text(e, style: TextStyle(color: _corTexto))))
+                                        .toList(),
+                                    onChanged: _onVinculoChanged,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _buildFormSectionHeader("Dados Bancários", Icons.account_balance),
+                                  TextFormField(
+                                    controller: _bancoCtrl,
+                                    style: TextStyle(color: _corTexto),
+                                    decoration: const InputDecoration(labelText: "Banco", prefixIcon: Icon(Icons.account_balance)),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _agenciaCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          decoration: const InputDecoration(labelText: "Agência"),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _contaCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          decoration: const InputDecoration(labelText: "Conta"),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _buildFormSectionHeader("Cargo & Atribuição", Icons.assignment_ind_outlined),
+                                  DropdownButtonFormField<int>(
+                                    value: _selectedCargoId,
+                                    isExpanded: true,
+                                    dropdownColor: _corCard,
+                                    decoration: const InputDecoration(labelText: "Selecionar Cargo", prefixIcon: Icon(Icons.list_alt)),
+                                    items: _cargos
+                                        .map((c) => DropdownMenuItem<int>(
                                               value: c['id'],
                                               child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment.center,
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                mainAxisAlignment: MainAxisAlignment.center,
                                                 children: [
-                                                  Text("${c['nome']}",
-                                                      style: const TextStyle(
-                                                          fontSize: 13,
-                                                          fontWeight:
-                                                              FontWeight.bold),
-                                                      overflow:
-                                                          TextOverflow.ellipsis),
                                                   Text(
-                                                      "${c['locacao'] ?? 'Sem Setor'} • ${c['percentual_padrao']}%",
-                                                      style: TextStyle(
-                                                          fontSize: 11,
-                                                          color: Colors.grey[700]),
-                                                      overflow:
-                                                          TextOverflow.ellipsis),
+                                                    "${c['nome']}",
+                                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _corTexto),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                  Text(
+                                                    "${c['locacao'] ?? 'Sem Setor'} • ${c['percentual_padrao']}%",
+                                                    style: TextStyle(fontSize: 11, color: _corSubTexto),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
                                                 ],
-                                              )))
-                                          .toList(),
-                                      onChanged: _onCargoChanged,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    TextFormField(
-                                        controller: _cargoManualCtrl,
-                                        decoration: const InputDecoration(
-                                            labelText: "Nome do Cargo")),
-                                    const SizedBox(height: 12),
-                                    TextFormField(
-                                        controller: _locacaoCtrl,
-                                        decoration: const InputDecoration(
-                                            labelText: "Locação / Setor")),
-                                    const Padding(
-                                        padding:
-                                            EdgeInsets.symmetric(vertical: 16),
-                                        child: Divider()),
-                                    const Text("Valores & Descontos",
-                                        style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.grey)),
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                            child: TextFormField(
-                                                controller: _percentualCtrl,
-                                                keyboardType:
-                                                    const TextInputType
-                                                        .numberWithOptions(
-                                                        decimal: true),
-                                                inputFormatters: [
-                                                  DecimalInputFormatter()
-                                                ],
-                                                decoration:
-                                                    const InputDecoration(
-                                                        labelText: "%",
-                                                        suffixText: "%",
-                                                        prefixIcon: Icon(
-                                                            Icons.percent)))),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                            child: TextFormField(
-                                                controller: _sipesCtrl,
-                                                keyboardType:
-                                                    const TextInputType
-                                                        .numberWithOptions(
-                                                        decimal: true),
-                                                inputFormatters: [
-                                                  CurrencyInputFormatter()
-                                                ],
-                                                decoration:
-                                                    const InputDecoration(
-                                                        labelText: "SIPES",
-                                                        prefixIcon: Icon(
-                                                            Icons.money_off)))),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    TextFormField(
-                                        controller: _irrfManualCtrl,
-                                        keyboardType:
-                                            const TextInputType
-                                                .numberWithOptions(
-                                                decimal: true),
-                                        inputFormatters: [
-                                          CurrencyInputFormatter()
-                                        ],
-                                        decoration:
-                                            const InputDecoration(
-                                                labelText: "IRRF a Descontar (Manual)",
-                                                helperText: "Ex: 200,16. Deixe vazio para cálculo automático.",
-                                                prefixIcon: Icon(
-                                                    Icons.request_quote, color: Colors.orange))),
-                                    const SizedBox(height: 12),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                            child: TextFormField(
-                                                controller: _pensaoCtrl,
-                                                keyboardType:
-                                                    const TextInputType
-                                                        .numberWithOptions(
-                                                        decimal: true),
-                                                inputFormatters: [
-                                                  CurrencyInputFormatter()
-                                                ],
-                                                decoration:
-                                                    const InputDecoration(
-                                                        labelText: "Pensão"))),
-                                        const SizedBox(width: 8),
-                                        Expanded(
-                                            child: TextFormField(
-                                                controller: _outrosCtrl,
-                                                keyboardType:
-                                                    const TextInputType
-                                                        .numberWithOptions(
-                                                        decimal: true),
-                                                inputFormatters: [
-                                                  CurrencyInputFormatter()
-                                                ],
-                                                decoration:
-                                                    const InputDecoration(
-                                                        labelText: "Outros"))),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    TextFormField(
-                                        controller: _acrescimosCtrl,
-                                        keyboardType: const TextInputType
-                                            .numberWithOptions(decimal: true),
-                                        inputFormatters: [
-                                          CurrencyInputFormatter()
-                                        ],
-                                        decoration: const InputDecoration(
-                                            labelText:
-                                                "Acréscimos (Aux. Transp.)",
-                                            prefixIcon: Icon(
-                                                Icons.add_circle_outline,
-                                                color: Colors.green))),
-                                    const SizedBox(height: 12),
-                                    Container(
-                                      decoration: BoxDecoration(
-                                          border: Border.all(
-                                              color: Colors.grey.shade300),
-                                          borderRadius:
-                                              BorderRadius.circular(8)),
-                                      child: Column(
-                                        children: [
-                                          CheckboxListTile(
-                                              title:
-                                                  const Text("Descontar INSS"),
-                                              secondary: const Icon(
-                                                  Icons.account_circle),
-                                              value: _temInss,
-                                              onChanged: (v) =>
-                                                  setState(() => _temInss = v!),
-                                              activeColor:
-                                                  const Color(0xFF0D47A1)),
-                                          const Divider(height: 1),
-                                          CheckboxListTile(
-                                              title:
-                                                  const Text("Descontar IRRF"),
-                                              secondary: const Icon(
-                                                  Icons.request_quote),
-                                              value: _temIrrf,
-                                              onChanged: (v) =>
-                                                  setState(() => _temIrrf = v!),
-                                              activeColor:
-                                                  const Color(0xFF0D47A1)),
-                                        ],
+                                              ),
+                                            ))
+                                        .toList(),
+                                    onChanged: _onCargoChanged,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextFormField(
+                                    controller: _cargoManualCtrl,
+                                    style: TextStyle(color: _corTexto),
+                                    decoration: const InputDecoration(labelText: "Nome do Cargo"),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextFormField(
+                                    controller: _locacaoCtrl,
+                                    style: TextStyle(color: _corTexto),
+                                    decoration: const InputDecoration(labelText: "Locação / Setor"),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  _buildFormSectionHeader("Valores & Descontos", Icons.monetization_on_outlined),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _percentualCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                          inputFormatters: [DecimalInputFormatter()],
+                                          decoration: const InputDecoration(labelText: "% Participação", suffixText: "%", prefixIcon: Icon(Icons.percent)),
+                                        ),
                                       ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _sipesCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                          inputFormatters: [CurrencyInputFormatter()],
+                                          decoration: const InputDecoration(labelText: "SIPES Venc.", prefixIcon: Icon(Icons.money_off)),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextFormField(
+                                    controller: _irrfManualCtrl,
+                                    style: TextStyle(color: _corTexto),
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    inputFormatters: [CurrencyInputFormatter()],
+                                    decoration: const InputDecoration(
+                                      labelText: "IRRF Desconto Manual",
+                                      helperText: "Vazio para cálculo automático",
+                                      prefixIcon: Icon(Icons.request_quote, color: Colors.orange),
                                     ),
-                                  ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _pensaoCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                          inputFormatters: [CurrencyInputFormatter()],
+                                          decoration: const InputDecoration(labelText: "Pensão"),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _outrosCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                          inputFormatters: [CurrencyInputFormatter()],
+                                          decoration: const InputDecoration(labelText: "Outros Desc."),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextFormField(
+                                    controller: _acrescimosCtrl,
+                                    style: TextStyle(color: _corTexto),
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    inputFormatters: [CurrencyInputFormatter()],
+                                    decoration: const InputDecoration(
+                                      labelText: "Acréscimos / Adicionais",
+                                      prefixIcon: Icon(Icons.add_circle_outline, color: Colors.green),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: _isDarkMode ? Colors.grey[850]! : Colors.grey.shade300),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Column(
+                                      children: [
+                                        CheckboxListTile(
+                                          title: Text("Descontar INSS", style: TextStyle(color: _corTexto)),
+                                          secondary: Icon(Icons.account_circle, color: _isDarkMode ? Colors.white70 : Colors.black54),
+                                          value: _temInss,
+                                          onChanged: (v) => setState(() => _temInss = v!),
+                                          activeColor: const Color(0xFF0D47A1),
+                                        ),
+                                        const Divider(height: 1),
+                                        CheckboxListTile(
+                                          title: Text("Descontar IRRF", style: TextStyle(color: _corTexto)),
+                                          secondary: Icon(Icons.request_quote, color: _isDarkMode ? Colors.white70 : Colors.black54),
+                                          value: _temIrrf,
+                                          onChanged: (v) => setState(() => _temIrrf = v!),
+                                          activeColor: const Color(0xFF0D47A1),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 48,
+                              child: ElevatedButton.icon(
+                                onPressed: _salvarOuAtualizar,
+                                icon: Icon(_editingId != null ? Icons.save : Icons.add_circle),
+                                label: Text(_editingId != null ? "SALVAR ALTERAÇÕES" : "ADICIONAR COLABORADOR"),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _editingId != null ? Colors.orange[800] : const Color(0xFF0D47A1),
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                                 ),
                               ),
-                              const SizedBox(height: 16),
-                              SizedBox(
-                                width: double.infinity,
-                                height: 50,
-                                child: ElevatedButton.icon(
-                                  onPressed: _salvarOuAtualizar,
-                                  icon: Icon(_editingId != null
-                                      ? Icons.save
-                                      : Icons.add_circle),
-                                  label: Text(_editingId != null
-                                      ? "SALVAR ALTERAÇÕES"
-                                      : "ADICIONAR COLABORADOR"),
-                                  style: ElevatedButton.styleFrom(
-                                      backgroundColor: _editingId != null
-                                          ? Colors.orange[800]
-                                          : const Color(0xFF0D47A1),
-                                      foregroundColor: Colors.white,
-                                      elevation: 2,
-                                      shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(8))),
-                                ),
-                              )
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
                   ),
-
-                Expanded(
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.only(top: 16, right: 16, bottom: 16),
-                    child: Card(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: const BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.vertical(
-                                    top: Radius.circular(12)),
-                                border: Border(
-                                    bottom: BorderSide(color: Colors.black12))),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.people_alt,
-                                    color: Colors.grey),
-                                const SizedBox(width: 10),
-                                Text("Lista de Colaboradores (${rows.length})",
-                                    style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold)),
-                              ],
-                            ),
+                ),
+              // Main data grid
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 16, right: 16, bottom: 16),
+                  child: Card(
+                    color: _corCard,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: _isDarkMode ? const Color(0xFF2C2C2C) : Colors.white,
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                            border: Border(bottom: BorderSide(color: _isDarkMode ? Colors.grey[850]! : Colors.black12)),
                           ),
-                          Expanded(
-                            child:
-                                LayoutBuilder(builder: (context, constraints) {
-                              return Scrollbar(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.people_alt, color: Colors.grey),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    "Lista de Colaboradores (${rows.length})",
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _corTexto),
+                                  ),
+                                ],
+                              ),
+                              if (!_mostrarFormulario && widget.userData['permissao'] != 'leitura')
+                                ElevatedButton.icon(
+                                  onPressed: () {
+                                    _limparForm();
+                                    setState(() => _mostrarFormulario = true);
+                                  },
+                                  icon: const Icon(Icons.person_add, size: 16),
+                                  label: const Text("Adicionar Novo Colaborador"),
+                                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0D47A1), foregroundColor: Colors.white),
+                                ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: LayoutBuilder(builder: (context, constraints) {
+                            return Scrollbar(
+                              controller: _horizontalScroll,
+                              thumbVisibility: true,
+                              trackVisibility: true,
+                              child: SingleChildScrollView(
                                 controller: _horizontalScroll,
-                                thumbVisibility: true,
-                                trackVisibility: true,
-                                child: SingleChildScrollView(
-                                  controller: _horizontalScroll,
-                                  scrollDirection: Axis.horizontal,
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                        minHeight: constraints.maxHeight,
-                                        minWidth: 1600),
-                                    child: Scrollbar(
+                                scrollDirection: Axis.horizontal,
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(minHeight: constraints.maxHeight, minWidth: 1750),
+                                  child: Scrollbar(
+                                    controller: _verticalScroll,
+                                    thumbVisibility: true,
+                                    child: SingleChildScrollView(
                                       controller: _verticalScroll,
-                                      thumbVisibility: true,
-                                      child: SingleChildScrollView(
-                                        controller: _verticalScroll,
-                                        scrollDirection: Axis.vertical,
-                                        child: DataTable(
-                                          headingRowColor:
-                                              WidgetStateProperty.all(
-                                                  Colors.grey[100]),
-                                          columnSpacing: 24,
-                                          horizontalMargin: 20,
-                                          columns: const [
-                                            DataColumn(
-                                                label: Text("NOME",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("CPF",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("RG",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("BANCO",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("AGÊNCIA",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("CONTA",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("CARGO / LOCAÇÃO",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("VÍNCULO",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("SIPES",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("%",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                            DataColumn(
-                                                label: Text("BRUTO",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors.blue))),
-                                            DataColumn(
-                                                label: Text("INSS",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors.red))),
-                                            DataColumn(
-                                                label: Text("IRRF",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors.red))),
-                                            DataColumn(
-                                                label: Text("PENSÃO",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors.orange))),
-                                            DataColumn(
-                                                label: Text("OUTROS",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors.orange))),
-                                            DataColumn(
-                                                label: Text("ACRÉSC.",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors.green))),
-                                            DataColumn(
-                                                label: Text("LÍQUIDO",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        color: Colors.green))),
-                                            DataColumn(
-                                                label: Text("AÇÕES",
-                                                    style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold))),
-                                          ],
-                                          rows: rows,
-                                        ),
+                                      scrollDirection: Axis.vertical,
+                                      child: DataTable(
+                                        headingRowColor: WidgetStateProperty.all(_isDarkMode ? const Color(0xFF2C2C2C) : Colors.grey[100]),
+                                        columnSpacing: 24,
+                                        horizontalMargin: 20,
+                                        columns: const [
+                                          DataColumn(label: Text("NOME", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("CPF", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("RG", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("BANCO", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("AGÊNCIA", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("CONTA", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("CARGO / LOCAÇÃO", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("VÍNCULO", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("SIPES", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("%", style: TextStyle(fontWeight: FontWeight.bold))),
+                                          DataColumn(label: Text("BRUTO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue))),
+                                          DataColumn(label: Text("INSS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))),
+                                          DataColumn(label: Text("IRRF", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red))),
+                                          DataColumn(label: Text("PENSÃO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))),
+                                          DataColumn(label: Text("OUTROS", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange))),
+                                          DataColumn(label: Text("ACRÉSC.", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green))),
+                                          DataColumn(label: Text("LÍQUIDO", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green))),
+                                          DataColumn(label: Text("AÇÕES", style: TextStyle(fontWeight: FontWeight.bold))),
+                                        ],
+                                        rows: rows,
                                       ),
                                     ),
                                   ),
                                 ),
-                              );
-                            }),
-                          ),
-                        ],
-                      ),
+                              ),
+                            );
+                          }),
+                        ),
+                      ],
                     ),
                   ),
-                )
-              ],
+                ),
+              )
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMiniInfoBox(String rotulo, double valor, Color cor) {
+    return Expanded(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 8,
+              offset: const Offset(0, 4),
+            ),
+          ],
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              rotulo.toUpperCase(),
+              style: TextStyle(
+                fontSize: 10.5,
+                color: Colors.grey.shade500,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.8,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _formatMoeda(valor),
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: cor,
+                letterSpacing: -0.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFormSectionHeader(String title, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 20, bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: const Color(0xFF0D47A1)),
+              const SizedBox(width: 8),
+              Text(
+                title.toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0D47A1),
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Divider(color: Colors.black12, height: 1),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================
+  // 📅 TAB 3: FECHAMENTO & HISTÓRICO MENSAL
+  // ==========================================
+  Widget _buildFechamentoTab() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Painel de Fechamento (Esquerda)
+          Expanded(
+            flex: 3,
+            child: Card(
+              color: _corCard,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.archive_outlined, color: Colors.blue, size: 24),
+                        const SizedBox(width: 8),
+                        Text("Novo Fechamento", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _corTexto)),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      "Realize a consolidação definitiva dos cálculos deste mês. O fechamento cria um registro histórico imutável para futuras consultas e auditorias.",
+                      style: TextStyle(color: _corSubTexto, fontSize: 13),
+                    ),
+                    const SizedBox(height: 24),
+                    DropdownButtonFormField<String>(
+                      value: _mesFechamento,
+                      dropdownColor: _corCard,
+                      decoration: const InputDecoration(labelText: "Mês de Referência", prefixIcon: Icon(Icons.calendar_month)),
+                      items: ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+                          .map((m) => DropdownMenuItem(value: m, child: Text(m, style: TextStyle(color: _corTexto))))
+                          .toList(),
+                      onChanged: (v) => setState(() => _mesFechamento = v!),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: _anoFechamento,
+                      dropdownColor: _corCard,
+                      decoration: const InputDecoration(labelText: "Ano de Referência", prefixIcon: Icon(Icons.date_range)),
+                      items: ['2025', '2026', '2027', '2028', '2029', '2030']
+                          .map((y) => DropdownMenuItem(value: y, child: Text(y, style: TextStyle(color: _corTexto))))
+                          .toList(),
+                      onChanged: (v) => setState(() => _anoFechamento = v!),
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      onPressed: () async {
+                        if (_funcionarios.isEmpty) {
+                          _mostrarSnack("Não há colaboradores para fechar a folha.", Colors.red);
+                          return;
+                        }
+                        final mesAno = "$_mesFechamento/$_anoFechamento";
+
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            backgroundColor: _corCard,
+                            title: Text("Confirmar Fechamento?", style: TextStyle(color: _corTexto)),
+                            content: Text("Tem certeza que deseja consolidar a folha de $mesAno? Isso substituirá qualquer fechamento anterior deste mesmo período.", style: TextStyle(color: _corTexto)),
+                            actions: [
+                              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancelar")),
+                              TextButton(
+                                onPressed: () async {
+                                  Navigator.pop(ctx);
+                                  setState(() => _isLoading = true);
+
+                                  // Coletar detalhes
+                                  List<Map<String, dynamic>> historico = [];
+                                  for (var f in _funcionarios) {
+                                    final calc = CalculadoraTaxas.calcularFolha(
+                                      percentual: f['percentual'],
+                                      valorSipes: f['valor_sipes'],
+                                      pensao: f['pensao'] ?? 0.0,
+                                      outros: f['outros'] ?? 0.0,
+                                      acrescimos: f['acrescimos'] ?? 0.0,
+                                      temInss: f['tem_inss'] == 1,
+                                      temIrrf: f['tem_irrf'] == 1,
+                                      configData: _configData!,
+                                      irrfManual: f['irrf_manual'] ?? 0.0,
+                                      irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
+                                    );
+
+                                    historico.add({
+                                      'funcionario_id': f['id'],
+                                      'nome': f['nome'],
+                                      'cpf': f['cpf'],
+                                      'cargo_nome': f['cargo_nome'],
+                                      'locacao': f['locacao'],
+                                      'vinculo': f['vinculo'],
+                                      'percentual': f['percentual'],
+                                      'valor_sipes': f['valor_sipes'],
+                                      'pensao': f['pensao'],
+                                      'outros': f['outros'],
+                                      'acrescimos': f['acrescimos'],
+                                      'bruto': calc['bruto'],
+                                      'inss': calc['inss'],
+                                      'irrf': calc['irrf'],
+                                      'liquido': calc['liquido'],
+                                    });
+                                  }
+
+                                  await DatabaseHelper.instance.fecharFolha(mesAno, widget.userData['usuario'], historico);
+                                  await DatabaseHelper.instance.registrarLog(widget.userData['usuario'], 'FECHAMENTO_FOLHA', 'Realizou o fechamento da folha para o período: $mesAno');
+                                  
+                                  _mostrarSnackPremium("Folha de $mesAno consolidada com sucesso!", Icons.verified, Colors.green);
+                                  _refreshTudo();
+                                },
+                                child: const Text("Confirmar Fechamento", style: TextStyle(color: Colors.green)),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.task_alt, color: Colors.white),
+                      label: const Text("SALVAR & FECHAR FOLHA"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF10B981),
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(double.infinity, 50),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 24),
+          // Lista de Fechamentos (Direita)
+          Expanded(
+            flex: 5,
+            child: Card(
+              color: _corCard,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.history, color: Colors.blue, size: 24),
+                        const SizedBox(width: 8),
+                        Text("Histórico de Fechamentos", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _corTexto)),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: _folhasSalvas.isEmpty
+                          ? Center(
+                              child: Text(
+                                "Nenhuma folha fechada encontrada.",
+                                style: TextStyle(color: _corSubTexto, fontStyle: FontStyle.italic),
+                              ),
+                            )
+                          : ListView.builder(
+                              itemCount: _folhasSalvas.length,
+                              itemBuilder: (context, index) {
+                                final f = _folhasSalvas[index];
+                                return Card(
+                                  color: _isDarkMode ? const Color(0xFF2C2C2C) : Colors.grey[50],
+                                  margin: const EdgeInsets.symmetric(vertical: 6),
+                                  child: ListTile(
+                                    title: Text(
+                                      f['mes_ano'] ?? '',
+                                      style: TextStyle(fontWeight: FontWeight.bold, color: _corTexto),
+                                    ),
+                                    subtitle: Text(
+                                      "Fechada em: ${f['data_fechamento']} por ${f['criado_por']}",
+                                      style: TextStyle(fontSize: 11, color: _corSubTexto),
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        // Visualizar
+                                        IconButton(
+                                          icon: const Icon(Icons.visibility, color: Colors.blue),
+                                          tooltip: "Visualizar Memória Histórica",
+                                          onPressed: () => _visualizarFolhaFechada(f['id'], f['mes_ano']),
+                                        ),
+                                        // Imprimir holerites consolidado
+                                        IconButton(
+                                          icon: const Icon(Icons.picture_as_pdf, color: Colors.amber),
+                                          tooltip: "Imprimir Holerites Históricos",
+                                          onPressed: () => _imprimirTodosHoleritesFechados(f['id'], f['mes_ano']),
+                                        ),
+                                        // Imprimir Relatório consolidado
+                                        IconButton(
+                                          icon: const Icon(Icons.analytics_outlined, color: Colors.green),
+                                          tooltip: "Imprimir Relatório de Repasse",
+                                          onPressed: () => _imprimirRelatorioFechado(f['id'], f['mes_ano']),
+                                        ),
+                                        // Excluir
+                                        if (widget.userData['permissao'] == 'admin')
+                                          IconButton(
+                                            icon: const Icon(Icons.delete_outline, color: Colors.red),
+                                            tooltip: "Excluir Registro",
+                                            onPressed: () async {
+                                              showDialog(
+                                                context: context,
+                                                builder: (ctx) => AlertDialog(
+                                                  backgroundColor: _corCard,
+                                                  title: Text("Excluir Histórico?", style: TextStyle(color: _corTexto)),
+                                                  content: Text("Tem certeza que deseja apagar permanentemente o fechamento de ${f['mes_ano']}?", style: TextStyle(color: _corTexto)),
+                                                  actions: [
+                                                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancelar")),
+                                                    TextButton(
+                                                      onPressed: () async {
+                                                        Navigator.pop(ctx);
+                                                        await DatabaseHelper.instance.deleteFolhaSalva(f['id']);
+                                                        await DatabaseHelper.instance.registrarLog(widget.userData['usuario'], 'EXCLUIR_HISTORICO', 'Excluiu o registro da folha de: ${f['mes_ano']}');
+                                                        _mostrarSnackPremium("Histórico excluído!", Icons.delete, Colors.red);
+                                                        _refreshTudo();
+                                                      },
+                                                      child: const Text("Sim, Excluir", style: TextStyle(color: Colors.red)),
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ],
@@ -1627,49 +2183,343 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildInfoCard(String title, double value, IconData icon, Color color,
-      {bool isBold = false}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-      decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-          boxShadow: [
-            BoxShadow(
-                color: color.withValues(alpha: 0.1),
-                blurRadius: 4,
-                offset: const Offset(0, 2))
-          ]),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1), shape: BoxShape.circle),
-              child: Icon(icon, color: color, size: 24)),
-          const SizedBox(width: 15),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(title,
-                  style: TextStyle(
-                      color: Colors.grey[600],
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600)),
-              const SizedBox(height: 4),
-              Text(_formatMoeda(value),
-                  style: TextStyle(
-                      fontSize: isBold ? 22 : 18,
-                      fontWeight: isBold ? FontWeight.bold : FontWeight.w600,
-                      color: color))
-            ],
-          ),
+  Future<void> _visualizarFolhaFechada(int folhaId, String mesAno) async {
+    final list = await DatabaseHelper.instance.readFolhaDetalhes(folhaId);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _corCard,
+        title: Text("Visualização Histórica: Folha de $mesAno", style: TextStyle(color: _corTexto)),
+        content: SizedBox(
+          width: 800,
+          height: 450,
+          child: list.isEmpty
+              ? const Center(child: Text("Nenhum detalhe encontrado para este período."))
+              : ListView.builder(
+                  itemCount: list.length,
+                  itemBuilder: (context, index) {
+                    final item = list[index];
+                    return Card(
+                      color: _isDarkMode ? const Color(0xFF2C2C2C) : Colors.grey[100],
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      child: ListTile(
+                        title: Text(item['nome'] ?? '', style: TextStyle(fontWeight: FontWeight.bold, color: _corTexto)),
+                        subtitle: Text(
+                          "Cargo: ${item['cargo_nome']} • Vínculo: ${item['vinculo']}",
+                          style: TextStyle(fontSize: 11, color: _corSubTexto),
+                        ),
+                        trailing: Text(
+                          "Líquido: ${_formatMoeda(item['liquido'])}",
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Fechar")),
         ],
       ),
     );
+  }
+
+  Future<void> _imprimirTodosHoleritesFechados(int folhaId, String mesAno) async {
+    setState(() => _isLoading = true);
+    final list = await DatabaseHelper.instance.readFolhaDetalhes(folhaId);
+    setState(() => _isLoading = false);
+
+    if (list.isEmpty) {
+      _mostrarSnack("Nenhum colaborador nesta folha.", Colors.red);
+      return;
+    }
+
+    // Criamos um PDF multi-páginas para os holerites históricos
+    final pdf = pw.Document();
+
+    for (var item in list) {
+      final colabMap = {
+        'nome': item['nome'],
+        'cpf': item['cpf'],
+        'cargo_nome': item['cargo_nome'],
+        'locacao': item['locacao'],
+        'banco': '-', 'agencia': '-', 'conta': '-', // Valores estáticos no histórico
+        'vinculo': item['vinculo'],
+        'percentual': item['percentual'] ?? 0.0,
+      };
+
+      final calcMap = {
+        'bruto': item['bruto'],
+        'inss': item['inss'],
+        'irrf': item['irrf'],
+        'pensao': item['pensao'],
+        'outros': item['outros'],
+        'acrescimos': item['acrescimos'],
+        'liquido': item['liquido'],
+        'base_global_bruta': item['bruto'] + item['valor_sipes'],
+        'base_irrf': item['bruto'] + item['valor_sipes'] - item['inss'],
+        'sipes': item['valor_sipes'] ?? 0.0,
+      };
+
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(20),
+          build: (pw.Context context) {
+            return pw.Column(
+              children: [
+                GeradorPdf.buildVia(colabMap, calcMap, mesAno, "VIA DO COLABORADOR"),
+                pw.SizedBox(height: 15),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 5),
+                  child: pw.Row(
+                    children: List.generate(
+                      40,
+                      (index) => pw.Expanded(
+                        child: pw.Padding(
+                          padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+                          child: pw.Divider(color: PdfColors.grey, height: 1, thickness: 1),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                pw.SizedBox(height: 15),
+                GeradorPdf.buildVia(colabMap, calcMap, mesAno, "VIA DO ITPS (ARQUIVO RH)"),
+              ],
+            );
+          },
+        ),
+      );
+    }
+
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => pdf.save(),
+      name: 'Holerites_Todos_$mesAno.pdf',
+    );
+  }
+
+  Future<void> _imprimirRelatorioFechado(int folhaId, String mesAno) async {
+    setState(() => _isLoading = true);
+    final list = await DatabaseHelper.instance.readFolhaDetalhes(folhaId);
+    setState(() => _isLoading = false);
+
+    if (list.isEmpty) {
+      _mostrarSnack("Nenhum colaborador nesta folha.", Colors.red);
+      return;
+    }
+
+    // Adaptar para as chamadas do gerador de PDF
+    List<Map<String, dynamic>> colaboradores = [];
+    List<Map<String, dynamic>> calculos = [];
+
+    for (var item in list) {
+      colaboradores.add({
+        'nome': item['nome'],
+        'cpf': item['cpf'],
+        'cargo_nome': item['cargo_nome'],
+        'locacao': item['locacao'],
+      });
+
+      calculos.add({
+        'bruto': item['bruto'],
+        'inss': item['inss'],
+        'irrf': item['irrf'],
+        'pensao': item['pensao'],
+        'outros': item['outros'],
+        'acrescimos': item['acrescimos'],
+        'liquido': item['liquido'],
+      });
+    }
+
+    await GeradorPdf.gerarERelatorioConsolidado(colaboradores, calculos, mesAno);
+  }
+
+  // ==========================================
+  // 🔍 TAB 4: AUDITORIA DE AÇÕES (LOGS)
+  // ==========================================
+  Widget _buildAuditoriaTab() {
+    // Filtragem dos logs
+    final logsExibidos = _filtroAuditoria.isEmpty
+        ? _logsAuditoria
+        : _logsAuditoria
+            .where((l) =>
+                l['usuario'].toString().toLowerCase().contains(_filtroAuditoria.toLowerCase()) ||
+                l['acao'].toString().toLowerCase().contains(_filtroAuditoria.toLowerCase()) ||
+                l['detalhes'].toString().toLowerCase().contains(_filtroAuditoria.toLowerCase()))
+            .toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Card(
+        color: _corCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.security, color: Colors.blue, size: 24),
+                      const SizedBox(width: 8),
+                      Text("Logs de Auditoria", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _corTexto)),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      // Barra de busca
+                      SizedBox(
+                        width: 250,
+                        height: 40,
+                        child: TextField(
+                          style: TextStyle(color: _corTexto, fontSize: 13),
+                          decoration: InputDecoration(
+                            hintText: "Buscar logs...",
+                            hintStyle: const TextStyle(fontSize: 13),
+                            prefixIcon: const Icon(Icons.search, size: 18),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                            fillColor: _isDarkMode ? const Color(0xFF2C2C2C) : Colors.grey[50],
+                          ),
+                          onChanged: (v) => setState(() => _filtroAuditoria = v),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      if (widget.userData['permissao'] == 'admin')
+                        ElevatedButton.icon(
+                          onPressed: () async {
+                            showDialog(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                backgroundColor: _corCard,
+                                title: Text("Limpar Trilha?", style: TextStyle(color: _corTexto)),
+                                content: Text("Tem certeza que deseja apagar permanentemente todos os registros de auditoria?", style: TextStyle(color: _corTexto)),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancelar")),
+                                  TextButton(
+                                    onPressed: () async {
+                                      Navigator.pop(ctx);
+                                      await DatabaseHelper.instance.limparLogs();
+                                      await DatabaseHelper.instance.registrarLog(widget.userData['usuario'], 'LIMPAR_AUDITORIA', 'Apagou todo o histórico de logs de auditoria do sistema.');
+                                      _mostrarSnackPremium("Logs apagados!", Icons.delete_forever, Colors.red);
+                                      _refreshTudo();
+                                    },
+                                    child: const Text("Confirmar Limpeza", style: TextStyle(color: Colors.red)),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.delete_forever, size: 16),
+                          label: const Text("Limpar logs"),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red[700], foregroundColor: Colors.white),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: logsExibidos.isEmpty
+                    ? Center(
+                        child: Text(
+                          "Nenhum log encontrado.",
+                          style: TextStyle(color: _corSubTexto, fontStyle: FontStyle.italic),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: logsExibidos.length,
+                        separatorBuilder: (context, index) => Divider(color: _isDarkMode ? Colors.grey[850]! : Colors.grey[200]!),
+                        itemBuilder: (context, index) {
+                          final log = logsExibidos[index];
+                          Color badgeColor = Colors.grey;
+                          if (log['acao'].toString().contains('CADAS')) {
+                            badgeColor = Colors.green;
+                          } else if (log['acao'].toString().contains('REMOV') || log['acao'].toString().contains('EXCLU')) {
+                            badgeColor = Colors.red;
+                          } else if (log['acao'].toString().contains('EDIT')) {
+                            badgeColor = Colors.blue;
+                          } else if (log['acao'].toString().contains('FECHA')) {
+                            badgeColor = Colors.purple;
+                          }
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Data / Hora
+                                Container(
+                                  width: 140,
+                                  child: Text(
+                                    log['data_hora'] ?? '',
+                                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.grey),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                // Badge Ação
+                                Container(
+                                  width: 160,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: badgeColor.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(color: badgeColor.withValues(alpha: 0.4)),
+                                  ),
+                                  child: Text(
+                                    log['acao'] ?? '',
+                                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: badgeColor),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                // Usuário
+                                Container(
+                                  width: 90,
+                                  child: Text(
+                                    log['usuario'].toString().toUpperCase(),
+                                    style: TextStyle(fontWeight: FontWeight.bold, color: _corTexto, fontSize: 12),
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                // Detalhes
+                                Expanded(
+                                  child: Text(
+                                    log['detalhes'] ?? '',
+                                    style: TextStyle(color: _corTexto, fontSize: 12.5),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- FORMATAÇÃO AUXILIAR ---
+  String _formatMoeda(dynamic val) {
+    if (val == null) return "R\$ 0,00";
+    double numVal = 0.0;
+    if (val is double) numVal = val;
+    if (val is int) numVal = val.toDouble();
+    final formatter = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+    return formatter.format(numVal);
+  }
+
+  double _parseMoeda(String text) {
+    if (text.isEmpty) return 0.0;
+    String clean = text.replaceAll('R\$', '').replaceAll('.', '').replaceAll(',', '.').trim();
+    return double.tryParse(clean) ?? 0.0;
   }
 }
 
