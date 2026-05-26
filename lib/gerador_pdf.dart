@@ -97,6 +97,7 @@ class GeradorPdf {
                 ],
               ),
             ],
+          ),
           pw.Divider(thickness: 1, color: PdfColors.black),
           // Informações do Colaborador
           pw.Row(
