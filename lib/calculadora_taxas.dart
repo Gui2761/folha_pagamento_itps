@@ -18,7 +18,7 @@ class CalculadoraTaxas {
     double irrfSipesReal = 0.0,
     double irrfManual = 0.0,
     int diasTrabalhados = 30,
-    bool previdenciaRpps = false,
+    double previdenciaRpps = 0.0,
   }) {
     final Map<String, double> geral =
         Map<String, double>.from(configData['geral'] ?? {});
@@ -42,35 +42,32 @@ class CalculadoraTaxas {
     double baseGlobalBruta = _arredondar(valorSipes + valorConvenio);
 
     // ========================================================================
-    // PASSO 3: CÁLCULO DA PREVIDÊNCIA (INSS PROGRESSIVO OU RPPS DE 14% FLAT)
+    // PASSO 3: CÁLCULO DA PREVIDÊNCIA (INSS PROGRESSIVO OU RPPS DE VALOR INFORMADO)
     // ========================================================================
     double inssTotalGlobal = 0.0;
     double inssSobreSipes = 0.0;
     double inssADescontar = 0.0;
 
     if (temInss) {
-      if (previdenciaRpps) {
-        // Regime Próprio de Previdência Social - Alíquota fixa de 14%
-        inssTotalGlobal = _arredondar(baseGlobalBruta * 0.14);
-        inssSobreSipes = _arredondar(valorSipes * 0.14);
-        inssADescontar = max(0.0, inssTotalGlobal - inssSobreSipes);
+      if (previdenciaRpps > 0.0) {
+        // Regime Próprio de Previdência Social - Valor Informado Manualmente
+        inssTotalGlobal = previdenciaRpps;
+        inssSobreSipes = 0.0;
+        inssADescontar = previdenciaRpps;
       } else {
-        // 3.1 Cálculo do INSS sobre a Base Global Bruta (com travão de teto)
-        // O travão: Se a Base Global Bruta > R$ 8.475,55, o cálculo não aumenta mais
+        // 3.1 Calculation of INSS on the Global Gross Base
         const double TETO_INSS = 8475.55;
 
         if (baseGlobalBruta > TETO_INSS) {
-          // Se ultrapassou o teto, aplicar a alíquota do teto sobre o teto
           inssTotalGlobal = _calcularInssProgressivo(TETO_INSS, tabelaInss);
         } else {
           inssTotalGlobal = _calcularInssProgressivo(baseGlobalBruta, tabelaInss);
         }
 
-        // 3.2 Cálculo do INSS já pago no SIPES
+        // 3.2 Calculation of INSS already paid in SIPES
         inssSobreSipes = _calcularInssProgressivo(valorSipes, tabelaInss);
 
-        // 3.3 INSS a Descontar nesta Folha = INSS Total - INSS já pago no SIPES
-        // Se já pagou o teto com o SIPES, este resultado será automaticamente zero
+        // 3.3 INSS to discount in this sheet
         inssADescontar = max(0.0, inssTotalGlobal - inssSobreSipes);
       }
     }
@@ -98,14 +95,7 @@ class CalculadoraTaxas {
         irrfTotalGlobal = 0.0;
         isentoIrrf2026 = true;
       } else {
-        // Para bater com o Excel do cliente:
-        // A base para o cálculo do IRRF 2026 (Bruto > 5000) utiliza:
-        // Bruto Global - INSS SIPES (ignora o INSS Convênio no cálculo da base para este redutor)
-        // E aplica a alíquota única de 27,5% com dedução de 908,73.
-        
-        // inssSobreSipes foi calculado no Passo 3.2
         double baseCalculoExcel = baseGlobalBruta - inssSobreSipes - pensao;
-        
         double irrfTradicional = (baseCalculoExcel * 0.275) - 908.73;
         
         if (baseGlobalBruta <= 7350.00) {
@@ -118,19 +108,15 @@ class CalculadoraTaxas {
 
       // 5.2 Cálculo do IRRF e Encontro de Contas
       if (irrfManual > 0) {
-        // O usuário informou exatamente o valor final a ser descontado
         irffADescontar = irrfManual;
         irrfSobreSipes = max(0, irrfTotalGlobal - irffADescontar); 
       } else if (irrfSipesReal > 0) {
-        // (Legado) Valor real informado pelo RH (do contracheque do SIPES)
         irrfSobreSipes = irrfSipesReal;
         irffADescontar = max(0, irrfTotalGlobal - irrfSobreSipes);
       } else {
-        // Cálculo automático para o SIPES usando Regra 2026
         if (valorSipes <= 5000.00) {
           irrfSobreSipes = 0.0;
         } else {
-          // Segue a mesma lógica do cálculo global para consistência
           double baseSipesIrrf = valorSipes - inssSobreSipes - pensao;
           double irrfTradicionalSipes = (baseSipesIrrf * 0.275) - 908.73;
           
@@ -176,7 +162,8 @@ class CalculadoraTaxas {
       'base_global_bruta': _arredondar(baseGlobalBruta),
       'base_irrf': _arredondar(baseIrrf),
       'dias_trabalhados': diasTrabalhados,
-      'previdencia_rpps': previdenciaRpps,
+      'previdencia_rpps': previdenciaRpps > 0.0,
+      'valor_previdencia_rpps': previdenciaRpps,
     };
   }
 

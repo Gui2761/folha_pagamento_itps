@@ -183,7 +183,7 @@ class GeradorPdf {
               if ((calc['inss'] ?? 0.0) > 0.0)
                 _buildTableRow(
                   '201', 
-                  (calc['previdencia_rpps'] == true) ? 'Previdência Própria (RPPS 14%)' : 'Desconto INSS (Enc. Convênio)', 
+                  (calc['previdencia_rpps'] == true) ? 'Previdência Própria (RPPS)' : 'Desconto INSS (Enc. Convênio)', 
                   '', 
                   _moeda.format(calc['inss'])
                 ),

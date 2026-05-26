@@ -294,9 +294,9 @@ void main() {
           reason: 'Bruto de 15 dias deve ser exatamente metade do Bruto integral de 30 dias');
     });
 
-    test('CENÁRIO 6: Previdência Própria (RPPS 14%)', () {
+    test('CENÁRIO 6: Previdência Própria (RPPS Valor Informado)', () {
       print('\n╔════════════════════════════════════════════════════════════════╗');
-      print('║  CENÁRIO 6: PREVIDÊNCIA PRÓPRIA (RPPS 14%)                      ║');
+      print('║  CENÁRIO 6: PREVIDÊNCIA PRÓPRIA (RPPS VALOR INFORMADO)          ║');
       print('╚════════════════════════════════════════════════════════════════╝');
 
       final resultado = CalculadoraTaxas.calcularFolha(
@@ -309,21 +309,19 @@ void main() {
         temIrrf: false,
         configData: configData,
         diasTrabalhados: 30,
-        previdenciaRpps: true,
+        previdenciaRpps: 294.0,
       );
 
       double bruto = resultado['bruto']; // 2100.00
       double baseGlobal = 3000.00 + bruto; // 5100.00
-      double rppsTotalEsperado = baseGlobal * 0.14; // 714.00
-      double rppsSipesEsperado = 3000.00 * 0.14; // 420.00
-      double descontoEsperado = rppsTotalEsperado - rppsSipesEsperado; // 294.00
+      double descontoEsperado = 294.00;
 
       print('  • Bruto Convênio: R\$ ${bruto.toStringAsFixed(2)}');
       print('  • Base Global Previdência: R\$ ${baseGlobal.toStringAsFixed(2)}');
       print('  • Desconto Previdência RPPS da Folha: R\$ ${resultado['inss']?.toStringAsFixed(2)} (Esperado: R\$ ${descontoEsperado.toStringAsFixed(2)})');
 
       expect(resultado['inss'], equals(294.0),
-          reason: 'Desconto deve bater com cálculo de 14% flat menos o sipes');
+          reason: 'Desconto deve bater exatamente com o valor manual informado');
     });
   });
 }

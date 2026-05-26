@@ -104,6 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _acrescimosCtrl = TextEditingController();
   final _irrfManualCtrl = TextEditingController();
   final _diasTrabalhadosCtrl = TextEditingController(text: '30');
+  final _rppsValCtrl = TextEditingController();
 
   // Scroll Controllers
   final ScrollController _horizontalScroll = ScrollController();
@@ -187,7 +188,7 @@ class _HomeScreenState extends State<HomeScreen> {
         'tem_irrf': _temIrrf ? 1 : 0,
         'irrf_manual': _parseMoeda(_irrfManualCtrl.text),
         'dias_trabalhados': int.tryParse(_diasTrabalhadosCtrl.text) ?? 30,
-        'previdencia_rpps': _previdenciaRpps ? 1 : 0,
+        'previdencia_rpps': _previdenciaRpps ? _parseMoeda(_rppsValCtrl.text) : 0.0,
       };
 
       if (_editingId == null) {
@@ -227,7 +228,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _diasTrabalhadosCtrl.text = (f['dias_trabalhados'] ?? 30).toString();
       _temInss = f['tem_inss'] == 1;
       _temIrrf = f['tem_irrf'] == 1;
-      _previdenciaRpps = f['previdencia_rpps'] == 1;
+      double valRpps = f['previdencia_rpps'] is num ? (f['previdencia_rpps'] as num).toDouble() : 0.0;
+      _previdenciaRpps = valRpps > 0.0;
+      _rppsValCtrl.text = valRpps > 0.0 ? _formatMoeda(valRpps) : '';
       _selectedCargoId = null;
     });
   }
@@ -247,6 +250,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _outrosCtrl.clear();
     _acrescimosCtrl.clear();
     _irrfManualCtrl.clear();
+    _rppsValCtrl.clear();
     _diasTrabalhadosCtrl.text = '30';
     setState(() {
       _editingId = null;
@@ -409,7 +413,7 @@ class _HomeScreenState extends State<HomeScreen> {
           irrfManual: f['irrf_manual'] ?? 0.0,
           irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
           diasTrabalhados: f['dias_trabalhados'] ?? 30,
-          previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
+          previdenciaRpps: f['previdencia_rpps'] is num ? (f['previdencia_rpps'] as num).toDouble() : 0.0,
         );
         tBruto += calc['bruto'] ?? 0.0;
         tInss += calc['inss'] ?? 0.0;
@@ -484,7 +488,7 @@ class _HomeScreenState extends State<HomeScreen> {
             irrfManual: f['irrf_manual'] ?? 0.0,
             irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
             diasTrabalhados: f['dias_trabalhados'] ?? 30,
-            previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
+            previdenciaRpps: f['previdencia_rpps'] is num ? (f['previdencia_rpps'] as num).toDouble() : 0.0,
           );
           sheetCat.appendRow([
             excel_pkg.TextCellValue(f['nome']),
@@ -540,7 +544,7 @@ class _HomeScreenState extends State<HomeScreen> {
           irrfManual: f['irrf_manual'] ?? 0.0,
           irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
           diasTrabalhados: f['dias_trabalhados'] ?? 30,
-          previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
+          previdenciaRpps: f['previdencia_rpps'] is num ? (f['previdencia_rpps'] as num).toDouble() : 0.0,
         );
         tBruto += calc['bruto'] ?? 0.0;
         tInss += calc['inss'] ?? 0.0;
@@ -1137,7 +1141,7 @@ class _HomeScreenState extends State<HomeScreen> {
         irrfManual: f['irrf_manual'] ?? 0.0,
         irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
         diasTrabalhados: f['dias_trabalhados'] ?? 30,
-        previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
+        previdenciaRpps: f['previdencia_rpps'] is num ? (f['previdencia_rpps'] as num).toDouble() : 0.0,
       );
 
       double bruto = calc['bruto'] ?? 0.0;
@@ -1338,7 +1342,7 @@ class _HomeScreenState extends State<HomeScreen> {
         irrfManual: f['irrf_manual'] ?? 0.0,
         irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
         diasTrabalhados: f['dias_trabalhados'] ?? 30,
-        previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
+        previdenciaRpps: f['previdencia_rpps'] is num ? (f['previdencia_rpps'] as num).toDouble() : 0.0,
       );
 
       totalBrutoGeral += calc['bruto'] ?? 0.0;
@@ -1365,7 +1369,7 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(f['nome'], style: TextStyle(fontWeight: FontWeight.w600, color: _corTexto)),
-                if (f['previdencia_rpps'] == 1) ...[
+                if (f['previdencia_rpps'] is num && (f['previdencia_rpps'] as num) > 0.0) ...[
                   const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -1800,9 +1804,39 @@ class _HomeScreenState extends State<HomeScreen> {
                                           title: Text("Previdência Própria (RPPS)", style: TextStyle(color: _corTexto)),
                                           secondary: const Icon(Icons.shield_outlined, color: Colors.blue),
                                           value: _previdenciaRpps,
-                                          onChanged: (v) => setState(() => _previdenciaRpps = v!),
+                                          onChanged: (v) {
+                                            setState(() {
+                                              _previdenciaRpps = v!;
+                                              if (!_previdenciaRpps) {
+                                                _rppsValCtrl.clear();
+                                              }
+                                            });
+                                          },
                                           activeColor: const Color(0xFF0D47A1),
                                         ),
+                                        if (_previdenciaRpps)
+                                          Padding(
+                                            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 12),
+                                            child: TextFormField(
+                                              controller: _rppsValCtrl,
+                                              decoration: InputDecoration(
+                                                labelText: "Valor RPPS (R$)",
+                                                prefixText: "R$ ",
+                                                labelStyle: TextStyle(color: _corTexto),
+                                                border: const OutlineInputBorder(),
+                                              ),
+                                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                              inputFormatters: [
+                                                FilteringTextInputFormatter.allow(RegExp(r'^\d*,?\d*')),
+                                              ],
+                                              validator: (v) {
+                                                if (_previdenciaRpps && (v == null || v.isEmpty)) {
+                                                  return "Informe o valor do RPPS";
+                                                }
+                                                return null;
+                                              },
+                                            ),
+                                          ),
                                         const Divider(height: 1),
                                         CheckboxListTile(
                                           title: Text("Descontar IRRF", style: TextStyle(color: _corTexto)),
@@ -2105,7 +2139,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       irrfManual: f['irrf_manual'] ?? 0.0,
                                       irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
                                       diasTrabalhados: f['dias_trabalhados'] ?? 30,
-                                      previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
+                                      previdenciaRpps: f['previdencia_rpps'] is num ? (f['previdencia_rpps'] as num).toDouble() : 0.0,
                                     );
 
                                     historico.add({
@@ -2125,7 +2159,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       'irrf': calc['irrf'],
                                       'liquido': calc['liquido'],
                                       'dias_trabalhados': f['dias_trabalhados'] ?? 30,
-                                      'previdencia_rpps': f['previdencia_rpps'] ?? 0,
+                                      'previdencia_rpps': f['previdencia_rpps'] ?? 0.0,
                                     });
                                   }
 
