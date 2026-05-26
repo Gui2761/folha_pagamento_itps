@@ -107,15 +107,15 @@ class GeradorPdf {
                 child: _buildInfoItem("Colaborador", colab['nome'] ?? ''),
               ),
               pw.Expanded(
-                flex: 1.2,
+                flex: 1,
                 child: _buildInfoItem("CPF", colab['cpf'] ?? ''),
               ),
               pw.Expanded(
-                flex: 1.2,
+                flex: 1,
                 child: _buildInfoItem("Previdência", (calc['previdencia_rpps'] == true) ? "RPPS" : "RGPS (INSS)"),
               ),
               pw.Expanded(
-                flex: 1.2,
+                flex: 1,
                 child: _buildInfoItem("Vínculo", colab['vinculo'] ?? ''),
               ),
             ],
@@ -132,7 +132,7 @@ class GeradorPdf {
                 child: _buildInfoItem("Lotação / Setor", colab['locacao'] ?? ''),
               ),
               pw.Expanded(
-                flex: 2.2,
+                flex: 3,
                 child: _buildInfoItem("Banco", "${colab['banco'] ?? ''} Ag: ${colab['agencia'] ?? ''} C/C: ${colab['conta'] ?? ''}"),
               ),
             ],
