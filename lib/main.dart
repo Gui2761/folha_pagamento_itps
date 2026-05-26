@@ -119,6 +119,10 @@ class _HomeScreenState extends State<HomeScreen> {
   // Filtro de auditoria
   String _filtroAuditoria = '';
 
+  // Filtros de colaboradores
+  String _filtroColaboradoresBusca = '';
+  String _filtroColaboradoresVinculo = 'Todos';
+
   // Parâmetros de Fechamento
   String _mesFechamento = 'Janeiro';
   String _anoFechamento = '2026';
@@ -1329,7 +1333,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final List<DataRow> rows = [];
 
-    for (var f in _funcionarios) {
+    final filteredList = _funcionarios.where((f) {
+      final nome = (f['nome'] ?? '').toString().toLowerCase();
+      final cpf = (f['cpf'] ?? '').toString().toLowerCase();
+      final cargo = (f['cargo_nome'] ?? '').toString().toLowerCase();
+      final vinculo = f['vinculo'] ?? '';
+      
+      final bateBusca = nome.contains(_filtroColaboradoresBusca.toLowerCase()) ||
+          cpf.contains(_filtroColaboradoresBusca.toLowerCase()) ||
+          cargo.contains(_filtroColaboradoresBusca.toLowerCase());
+          
+      final bateVinculo = _filtroColaboradoresVinculo == 'Todos' || vinculo == _filtroColaboradoresVinculo;
+      
+      return bateBusca && bateVinculo;
+    }).toList();
+
+    for (var f in filteredList) {
       final calc = CalculadoraTaxas.calcularFolha(
         percentual: f['percentual'],
         valorSipes: f['valor_sipes'],
@@ -1529,6 +1548,73 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildMiniInfoBox("Base do Mês", baseConvenio, Colors.grey),
               _buildMiniInfoBox("RAT / Patronal ($aliquotaPatronal%)", valorPatronal, Colors.orange),
               _buildMiniInfoBox("Retirada Total", totalRetirada, Colors.green),
+            ],
+          ),
+        ),
+        // Barra de Busca e Filtro de Vínculo Premium
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          decoration: BoxDecoration(
+            color: _corCard,
+            border: Border(bottom: BorderSide(color: _isDarkMode ? Colors.grey[850]! : Colors.grey[100]!)),
+          ),
+          child: Row(
+            children: [
+              // Campo de Busca
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  onChanged: (v) => setState(() => _filtroColaboradoresBusca = v),
+                  style: TextStyle(color: _corTexto, fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: "Buscar por nome, CPF ou cargo...",
+                    hintStyle: TextStyle(color: _corSubTexto, fontSize: 14),
+                    prefixIcon: const Icon(Icons.search, color: Colors.blue),
+                    fillColor: _isDarkMode ? Colors.grey[900] : Colors.grey[100],
+                    filled: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(30),
+                      borderSide: const BorderSide(color: Colors.blue, width: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              // Segmentação de Vínculos (Todos, Efetivo, Comissionado, Cedido, Estagiário)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: ['Todos', 'Efetivo', 'Comissionado', 'Cedido', 'Estagiário'].map((type) {
+                  final isSelected = _filtroColaboradoresVinculo == type;
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: ChoiceChip(
+                      label: Text(type),
+                      selected: isSelected,
+                      onSelected: (selected) {
+                        if (selected) {
+                          setState(() => _filtroColaboradoresVinculo = type);
+                        }
+                      },
+                      selectedColor: Colors.blue.withValues(alpha: 0.15),
+                      backgroundColor: _isDarkMode ? Colors.grey[900] : Colors.grey[50],
+                      labelStyle: TextStyle(
+                        color: isSelected ? Colors.blue : (_isDarkMode ? Colors.grey[400] : Colors.grey[700]),
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                      side: BorderSide(
+                        color: isSelected ? Colors.blue.shade300 : Colors.transparent,
+                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      showCheckmark: false,
+                    ),
+                  );
+                }).toList(),
+              ),
             ],
           ),
         ),
