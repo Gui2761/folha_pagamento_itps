@@ -97,9 +97,7 @@ class GeradorPdf {
                 ],
               ),
             ],
-          ),
           pw.Divider(thickness: 1, color: PdfColors.black),
-
           // Informações do Colaborador
           pw.Row(
             children: [
@@ -108,11 +106,15 @@ class GeradorPdf {
                 child: _buildInfoItem("Colaborador", colab['nome'] ?? ''),
               ),
               pw.Expanded(
-                flex: 1,
+                flex: 1.2,
                 child: _buildInfoItem("CPF", colab['cpf'] ?? ''),
               ),
               pw.Expanded(
-                flex: 1,
+                flex: 1.2,
+                child: _buildInfoItem("Previdência", (calc['previdencia_rpps'] == true) ? "RPPS" : "RGPS (INSS)"),
+              ),
+              pw.Expanded(
+                flex: 1.2,
                 child: _buildInfoItem("Vínculo", colab['vinculo'] ?? ''),
               ),
             ],
@@ -129,7 +131,7 @@ class GeradorPdf {
                 child: _buildInfoItem("Lotação / Setor", colab['locacao'] ?? ''),
               ),
               pw.Expanded(
-                flex: 1,
+                flex: 2.2,
                 child: _buildInfoItem("Banco", "${colab['banco'] ?? ''} Ag: ${colab['agencia'] ?? ''} C/C: ${colab['conta'] ?? ''}"),
               ),
             ],
@@ -169,10 +171,21 @@ class GeradorPdf {
                 ],
               ),
               // Vencimento do Convênio (Bruto)
-              _buildTableRow('101', 'Valor Bruto do Convênio (${colab['percentual'] ?? 0}%)', _moeda.format(calc['bruto'] ?? 0.0), ''),
-              // Desconto INSS
+              _buildTableRow(
+                '101', 
+                'Valor Bruto do Convênio (${colab['percentual'] ?? 0}%)' + 
+                    ((calc['dias_trabalhados'] ?? 30) < 30 ? ' - Proporcional ${calc['dias_trabalhados']} dias' : ''),
+                _moeda.format(calc['bruto'] ?? 0.0), 
+                ''
+              ),
+              // Desconto INSS / RPPS
               if ((calc['inss'] ?? 0.0) > 0.0)
-                _buildTableRow('201', 'Desconto INSS (Enc. Convênio)', '', _moeda.format(calc['inss'])),
+                _buildTableRow(
+                  '201', 
+                  (calc['previdencia_rpps'] == true) ? 'Previdência Própria (RPPS 14%)' : 'Desconto INSS (Enc. Convênio)', 
+                  '', 
+                  _moeda.format(calc['inss'])
+                ),
               // Desconto IRRF
               if ((calc['irrf'] ?? 0.0) > 0.0)
                 _buildTableRow('202', 'Desconto IRRF (Enc. Convênio)', '', _moeda.format(calc['irrf'])),
@@ -432,7 +445,7 @@ class GeradorPdf {
                     _buildHeaderCell('Cargo'),
                     _buildHeaderCell('Lotação'),
                     _buildHeaderCell('Bruto'),
-                    _buildHeaderCell('INSS'),
+                    _buildHeaderCell('Prev.'),
                     _buildHeaderCell('IRRF'),
                     _buildHeaderCell('Pensão'),
                     _buildHeaderCell('Outros'),

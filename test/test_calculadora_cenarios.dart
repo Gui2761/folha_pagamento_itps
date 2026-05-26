@@ -83,8 +83,8 @@ void main() {
       // Validações básicas
       expect(resultado['inss'], greaterThan(0),
           reason: 'Deve ter INSS a descontar');
-      expect(resultado['irrf'], greaterThan(0),
-          reason: 'Deve ter IRRF a descontar');
+      expect(resultado['irrf'], equals(0.0),
+          reason: 'Deve ser isento de IRRF em 2026 por ser <= 5000');
       expect(resultado['liquido'], greaterThan(0),
           reason: 'Líquido deve ser positivo');
     });
@@ -256,6 +256,74 @@ void main() {
       expect(resultado['base_irrf'],
           lessThan(resultado['base_global_bruta']! - resultado['inss_total']!),
           reason: 'Base IRRF deve ser reduzida pela pensão');
+    });
+
+    test('CENÁRIO 5: Dedução Proporcional (Trabalhou 15 Dias)', () {
+      print('\n╔════════════════════════════════════════════════════════════════╗');
+      print('║  CENÁRIO 5: DEDUÇÃO PROPORCIONAL (15 DIAS)                     ║');
+      print('╚════════════════════════════════════════════════════════════════╝');
+
+      final resultadoIntegral = CalculadoraTaxas.calcularFolha(
+        percentual: 1.0,
+        valorSipes: 3000.00,
+        pensao: 0.0,
+        outros: 0.0,
+        acrescimos: 0.0,
+        temInss: false,
+        temIrrf: false,
+        configData: configData,
+        diasTrabalhados: 30,
+      );
+
+      final resultadoProporcional = CalculadoraTaxas.calcularFolha(
+        percentual: 1.0,
+        valorSipes: 3000.00,
+        pensao: 0.0,
+        outros: 0.0,
+        acrescimos: 0.0,
+        temInss: false,
+        temIrrf: false,
+        configData: configData,
+        diasTrabalhados: 15,
+      );
+
+      print('  • Bruto Integral (30 dias): R\$ ${resultadoIntegral['bruto']?.toStringAsFixed(2)}');
+      print('  • Bruto Proporcional (15 dias): R\$ ${resultadoProporcional['bruto']?.toStringAsFixed(2)}');
+
+      expect(resultadoProporcional['bruto'], equals(resultadoIntegral['bruto']! / 2.0),
+          reason: 'Bruto de 15 dias deve ser exatamente metade do Bruto integral de 30 dias');
+    });
+
+    test('CENÁRIO 6: Previdência Própria (RPPS 14%)', () {
+      print('\n╔════════════════════════════════════════════════════════════════╗');
+      print('║  CENÁRIO 6: PREVIDÊNCIA PRÓPRIA (RPPS 14%)                      ║');
+      print('╚════════════════════════════════════════════════════════════════╝');
+
+      final resultado = CalculadoraTaxas.calcularFolha(
+        percentual: 1.0,
+        valorSipes: 3000.00,
+        pensao: 0.0,
+        outros: 0.0,
+        acrescimos: 0.0,
+        temInss: true,
+        temIrrf: false,
+        configData: configData,
+        diasTrabalhados: 30,
+        previdenciaRpps: true,
+      );
+
+      double bruto = resultado['bruto']; // 2100.00
+      double baseGlobal = 3000.00 + bruto; // 5100.00
+      double rppsTotalEsperado = baseGlobal * 0.14; // 714.00
+      double rppsSipesEsperado = 3000.00 * 0.14; // 420.00
+      double descontoEsperado = rppsTotalEsperado - rppsSipesEsperado; // 294.00
+
+      print('  • Bruto Convênio: R\$ ${bruto.toStringAsFixed(2)}');
+      print('  • Base Global Previdência: R\$ ${baseGlobal.toStringAsFixed(2)}');
+      print('  • Desconto Previdência RPPS da Folha: R\$ ${resultado['inss']?.toStringAsFixed(2)} (Esperado: R\$ ${descontoEsperado.toStringAsFixed(2)})');
+
+      expect(resultado['inss'], equals(294.0),
+          reason: 'Desconto deve bater com cálculo de 14% flat menos o sipes');
     });
   });
 }

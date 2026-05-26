@@ -17,6 +17,8 @@ class CalculadoraTaxas {
     required Map<String, dynamic> configData,
     double irrfSipesReal = 0.0,
     double irrfManual = 0.0,
+    int diasTrabalhados = 30,
+    bool previdenciaRpps = false,
   }) {
     final Map<String, double> geral =
         Map<String, double>.from(configData['geral'] ?? {});
@@ -26,10 +28,12 @@ class CalculadoraTaxas {
     // ========================================================================
     // PASSO 1: CÁLCULO DO VALOR DO CONVÊNIO
     // Fórmula: Valor do Convênio = Base do Mês * Índice de Participação
+    // Com dedução de faltas se o colaborador não trabalhou os 30 dias completos
     // ========================================================================
     double baseConvenioMes = geral['base_convenio'] ?? 211000.00;
     double indiceparticipacao = percentual / 100;
-    double valorConvenio = _arredondar(baseConvenioMes * indiceparticipacao);
+    double valorConvenioIntegral = baseConvenioMes * indiceparticipacao;
+    double valorConvenio = _arredondar(valorConvenioIntegral * (diasTrabalhados / 30.0));
 
     // ========================================================================
     // PASSO 2: SOMA DA BASE GLOBAL BRUTA
@@ -38,30 +42,37 @@ class CalculadoraTaxas {
     double baseGlobalBruta = _arredondar(valorSipes + valorConvenio);
 
     // ========================================================================
-    // PASSO 3: CÁLCULO DO INSS (COM TRAVÃO DE TETO EM R$ 8.475,55)
+    // PASSO 3: CÁLCULO DA PREVIDÊNCIA (INSS PROGRESSIVO OU RPPS DE 14% FLAT)
     // ========================================================================
     double inssTotalGlobal = 0.0;
     double inssSobreSipes = 0.0;
     double inssADescontar = 0.0;
 
     if (temInss) {
-      // 3.1 Cálculo do INSS sobre a Base Global Bruta (com travão de teto)
-      // O travão: Se a Base Global Bruta > R$ 8.475,55, o cálculo não aumenta mais
-      const double TETO_INSS = 8475.55;
-
-      if (baseGlobalBruta > TETO_INSS) {
-        // Se ultrapassou o teto, aplicar a alíquota do teto sobre o teto
-        inssTotalGlobal = _calcularInssProgressivo(TETO_INSS, tabelaInss);
+      if (previdenciaRpps) {
+        // Regime Próprio de Previdência Social - Alíquota fixa de 14%
+        inssTotalGlobal = _arredondar(baseGlobalBruta * 0.14);
+        inssSobreSipes = _arredondar(valorSipes * 0.14);
+        inssADescontar = max(0.0, inssTotalGlobal - inssSobreSipes);
       } else {
-        inssTotalGlobal = _calcularInssProgressivo(baseGlobalBruta, tabelaInss);
+        // 3.1 Cálculo do INSS sobre a Base Global Bruta (com travão de teto)
+        // O travão: Se a Base Global Bruta > R$ 8.475,55, o cálculo não aumenta mais
+        const double TETO_INSS = 8475.55;
+
+        if (baseGlobalBruta > TETO_INSS) {
+          // Se ultrapassou o teto, aplicar a alíquota do teto sobre o teto
+          inssTotalGlobal = _calcularInssProgressivo(TETO_INSS, tabelaInss);
+        } else {
+          inssTotalGlobal = _calcularInssProgressivo(baseGlobalBruta, tabelaInss);
+        }
+
+        // 3.2 Cálculo do INSS já pago no SIPES
+        inssSobreSipes = _calcularInssProgressivo(valorSipes, tabelaInss);
+
+        // 3.3 INSS a Descontar nesta Folha = INSS Total - INSS já pago no SIPES
+        // Se já pagou o teto com o SIPES, este resultado será automaticamente zero
+        inssADescontar = max(0.0, inssTotalGlobal - inssSobreSipes);
       }
-
-      // 3.2 Cálculo do INSS já pago no SIPES
-      inssSobreSipes = _calcularInssProgressivo(valorSipes, tabelaInss);
-
-      // 3.3 INSS a Descontar nesta Folha = INSS Total - INSS já pago no SIPES
-      // Se já pagou o teto com o SIPES, este resultado será automaticamente zero
-      inssADescontar = max(0, inssTotalGlobal - inssSobreSipes);
     }
 
     // ========================================================================
@@ -164,6 +175,8 @@ class CalculadoraTaxas {
       'base_convenio': _arredondar(valorConvenio),
       'base_global_bruta': _arredondar(baseGlobalBruta),
       'base_irrf': _arredondar(baseIrrf),
+      'dias_trabalhados': diasTrabalhados,
+      'previdencia_rpps': previdenciaRpps,
     };
   }
 

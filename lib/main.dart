@@ -84,6 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Timer? _refreshTimer;
   int _activeTab = 0; // 0: Dashboard, 1: Colaboradores, 2: Fechamento, 3: Auditoria
   bool _isDarkMode = false;
+  bool _previdenciaRpps = false;
 
   final _formKey = GlobalKey<FormState>();
 
@@ -102,6 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final _outrosCtrl = TextEditingController();
   final _acrescimosCtrl = TextEditingController();
   final _irrfManualCtrl = TextEditingController();
+  final _diasTrabalhadosCtrl = TextEditingController(text: '30');
 
   // Scroll Controllers
   final ScrollController _horizontalScroll = ScrollController();
@@ -184,6 +186,8 @@ class _HomeScreenState extends State<HomeScreen> {
         'tem_inss': _temInss ? 1 : 0,
         'tem_irrf': _temIrrf ? 1 : 0,
         'irrf_manual': _parseMoeda(_irrfManualCtrl.text),
+        'dias_trabalhados': int.tryParse(_diasTrabalhadosCtrl.text) ?? 30,
+        'previdencia_rpps': _previdenciaRpps ? 1 : 0,
       };
 
       if (_editingId == null) {
@@ -220,8 +224,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _outrosCtrl.text = _formatMoeda(f['outros'] ?? 0.0);
       _acrescimosCtrl.text = _formatMoeda(f['acrescimos'] ?? 0.0);
       _irrfManualCtrl.text = _formatMoeda(f['irrf_manual'] ?? 0.0);
+      _diasTrabalhadosCtrl.text = (f['dias_trabalhados'] ?? 30).toString();
       _temInss = f['tem_inss'] == 1;
       _temIrrf = f['tem_irrf'] == 1;
+      _previdenciaRpps = f['previdencia_rpps'] == 1;
       _selectedCargoId = null;
     });
   }
@@ -241,12 +247,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _outrosCtrl.clear();
     _acrescimosCtrl.clear();
     _irrfManualCtrl.clear();
+    _diasTrabalhadosCtrl.text = '30';
     setState(() {
       _editingId = null;
       _selectedCargoId = null;
       _vinculoSelecionado = 'Efetivo';
       _temInss = false;
       _temIrrf = true;
+      _previdenciaRpps = false;
     });
   }
 
@@ -400,6 +408,8 @@ class _HomeScreenState extends State<HomeScreen> {
           configData: _configData!,
           irrfManual: f['irrf_manual'] ?? 0.0,
           irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
+          diasTrabalhados: f['dias_trabalhados'] ?? 30,
+          previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
         );
         tBruto += calc['bruto'] ?? 0.0;
         tInss += calc['inss'] ?? 0.0;
@@ -473,6 +483,8 @@ class _HomeScreenState extends State<HomeScreen> {
             configData: _configData!,
             irrfManual: f['irrf_manual'] ?? 0.0,
             irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
+            diasTrabalhados: f['dias_trabalhados'] ?? 30,
+            previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
           );
           sheetCat.appendRow([
             excel_pkg.TextCellValue(f['nome']),
@@ -527,6 +539,8 @@ class _HomeScreenState extends State<HomeScreen> {
           configData: _configData!,
           irrfManual: f['irrf_manual'] ?? 0.0,
           irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
+          diasTrabalhados: f['dias_trabalhados'] ?? 30,
+          previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
         );
         tBruto += calc['bruto'] ?? 0.0;
         tInss += calc['inss'] ?? 0.0;
@@ -1122,6 +1136,8 @@ class _HomeScreenState extends State<HomeScreen> {
         configData: _configData!,
         irrfManual: f['irrf_manual'] ?? 0.0,
         irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
+        diasTrabalhados: f['dias_trabalhados'] ?? 30,
+        previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
       );
 
       double bruto = calc['bruto'] ?? 0.0;
@@ -1321,6 +1337,8 @@ class _HomeScreenState extends State<HomeScreen> {
         configData: _configData!,
         irrfManual: f['irrf_manual'] ?? 0.0,
         irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
+        diasTrabalhados: f['dias_trabalhados'] ?? 30,
+        previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
       );
 
       totalBrutoGeral += calc['bruto'] ?? 0.0;
@@ -1343,7 +1361,26 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            Text(f['nome'], style: TextStyle(fontWeight: FontWeight.w600, color: _corTexto)),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(f['nome'], style: TextStyle(fontWeight: FontWeight.w600, color: _corTexto)),
+                if (f['previdencia_rpps'] == 1) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      "RPPS",
+                      style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 9),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ])),
           DataCell(Text(f['cpf'] ?? '-', style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: _corTexto))),
           DataCell(Text(f['rg'] ?? '-', style: TextStyle(color: _corSubTexto))),
@@ -1396,7 +1433,18 @@ class _HomeScreenState extends State<HomeScreen> {
           )),
           DataCell(Text(_formatMoeda(f['valor_sipes']), style: TextStyle(color: _corSubTexto))),
           DataCell(Text("${f['percentual']}%", style: TextStyle(fontWeight: FontWeight.bold, color: _corTexto))),
-          DataCell(Text(_formatMoeda(calc['bruto']), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue))),
+          DataCell(Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(_formatMoeda(calc['bruto']), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+              if ((f['dias_trabalhados'] ?? 30) < 30)
+                Text(
+                  "${f['dias_trabalhados']} dias",
+                  style: TextStyle(fontSize: 10, color: Colors.orange[800], fontWeight: FontWeight.bold),
+                ),
+            ],
+          )),
           DataCell(Text(f['tem_inss'] == 1 ? _formatMoeda(calc['inss']) : "-", style: TextStyle(color: Colors.red[300]))),
           DataCell(Text(f['tem_irrf'] == 1 ? _formatMoeda(calc['irrf']) : "-", style: TextStyle(color: Colors.red[300]))),
           DataCell(Text(_formatMoeda(f['pensao']), style: TextStyle(color: Colors.orange[300]))),
@@ -1698,16 +1746,39 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 12),
-                                  TextFormField(
-                                    controller: _acrescimosCtrl,
-                                    style: TextStyle(color: _corTexto),
-                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                    inputFormatters: [CurrencyInputFormatter()],
-                                    decoration: const InputDecoration(
-                                      labelText: "Acréscimos / Adicionais",
-                                      prefixIcon: Icon(Icons.add_circle_outline, color: Colors.green),
-                                    ),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _acrescimosCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                          inputFormatters: [CurrencyInputFormatter()],
+                                          decoration: const InputDecoration(
+                                            labelText: "Acréscimos",
+                                            prefixIcon: Icon(Icons.add_circle_outline, color: Colors.green),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: TextFormField(
+                                          controller: _diasTrabalhadosCtrl,
+                                          style: TextStyle(color: _corTexto),
+                                          keyboardType: TextInputType.number,
+                                          decoration: const InputDecoration(
+                                            labelText: "Dias Trab.",
+                                            prefixIcon: Icon(Icons.calendar_today, color: Colors.blue),
+                                          ),
+                                          validator: (v) {
+                                            if (v == null || v.isEmpty) return 'Obrigatório';
+                                            final val = int.tryParse(v);
+                                            if (val == null || val < 1 || val > 30) return '1 a 30 dias';
+                                            return null;
+                                          },
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   const SizedBox(height: 12),
                                   Container(
@@ -1718,10 +1789,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                     child: Column(
                                       children: [
                                         CheckboxListTile(
-                                          title: Text("Descontar INSS", style: TextStyle(color: _corTexto)),
+                                          title: Text("Descontar Previdência", style: TextStyle(color: _corTexto)),
                                           secondary: Icon(Icons.account_circle, color: _isDarkMode ? Colors.white70 : Colors.black54),
                                           value: _temInss,
                                           onChanged: (v) => setState(() => _temInss = v!),
+                                          activeColor: const Color(0xFF0D47A1),
+                                        ),
+                                        const Divider(height: 1),
+                                        CheckboxListTile(
+                                          title: Text("Previdência Própria (RPPS)", style: TextStyle(color: _corTexto)),
+                                          secondary: const Icon(Icons.shield_outlined, color: Colors.blue),
+                                          value: _previdenciaRpps,
+                                          onChanged: (v) => setState(() => _previdenciaRpps = v!),
                                           activeColor: const Color(0xFF0D47A1),
                                         ),
                                         const Divider(height: 1),
@@ -2025,6 +2104,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       configData: _configData!,
                                       irrfManual: f['irrf_manual'] ?? 0.0,
                                       irrfSipesReal: f['irrf_sipes_real'] ?? 0.0,
+                                      diasTrabalhados: f['dias_trabalhados'] ?? 30,
+                                      previdenciaRpps: (f['previdencia_rpps'] ?? 0) == 1,
                                     );
 
                                     historico.add({
@@ -2043,6 +2124,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                       'inss': calc['inss'],
                                       'irrf': calc['irrf'],
                                       'liquido': calc['liquido'],
+                                      'dias_trabalhados': f['dias_trabalhados'] ?? 30,
+                                      'previdencia_rpps': f['previdencia_rpps'] ?? 0,
                                     });
                                   }
 
@@ -2260,6 +2343,8 @@ class _HomeScreenState extends State<HomeScreen> {
         'base_global_bruta': item['bruto'] + item['valor_sipes'],
         'base_irrf': item['bruto'] + item['valor_sipes'] - item['inss'],
         'sipes': item['valor_sipes'] ?? 0.0,
+        'dias_trabalhados': item['dias_trabalhados'] ?? 30,
+        'previdencia_rpps': (item['previdencia_rpps'] ?? 0) == 1,
       };
 
       pdf.addPage(

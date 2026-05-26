@@ -44,7 +44,7 @@ class DatabaseHelper {
       return await databaseFactory.openDatabase(
         path,
         options: OpenDatabaseOptions(
-          version: 5,
+          version: 6,
           onCreate: _onCreate,
           onUpgrade: _onUpgrade,
         ),
@@ -52,7 +52,7 @@ class DatabaseHelper {
     } else {
       final dbPath = await getDatabasesPath();
       path = join(dbPath, filePath);
-      return await openDatabase(path, version: 5, onCreate: _onCreate, onUpgrade: _onUpgrade);
+      return await openDatabase(path, version: 6, onCreate: _onCreate, onUpgrade: _onUpgrade);
     }
   }
 
@@ -77,7 +77,9 @@ class DatabaseHelper {
         tem_inss INTEGER,
         tem_irrf INTEGER,
         irrf_sipes_real REAL DEFAULT 0.0,
-        irrf_manual REAL DEFAULT 0.0
+        irrf_manual REAL DEFAULT 0.0,
+        dias_trabalhados INTEGER DEFAULT 30,
+        previdencia_rpps INTEGER DEFAULT 0
       )
     ''');
 
@@ -138,6 +140,8 @@ class DatabaseHelper {
         inss REAL,
         irrf REAL,
         liquido REAL,
+        dias_trabalhados INTEGER DEFAULT 30,
+        previdencia_rpps INTEGER DEFAULT 0,
         FOREIGN KEY (folha_salva_id) REFERENCES folhas_salvas (id) ON DELETE CASCADE
       )
     ''');
@@ -482,6 +486,20 @@ class DatabaseHelper {
         ''');
       } catch (_) {}
     }
+    if (oldVersion < 6) {
+      try {
+        await db.execute('ALTER TABLE funcionarios ADD COLUMN dias_trabalhados INTEGER DEFAULT 30');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE funcionarios ADD COLUMN previdencia_rpps INTEGER DEFAULT 0');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE folha_historico_detalhe ADD COLUMN dias_trabalhados INTEGER DEFAULT 30');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE folha_historico_detalhe ADD COLUMN previdencia_rpps INTEGER DEFAULT 0');
+      } catch (_) {}
+    }
   }
 
   Future<void> resetTabelasFiscais() async {
@@ -569,6 +587,8 @@ class DatabaseHelper {
           'inss': item['inss'],
           'irrf': item['irrf'],
           'liquido': item['liquido'],
+          'dias_trabalhados': item['dias_trabalhados'] ?? 30,
+          'previdencia_rpps': item['previdencia_rpps'] ?? 0,
         });
       }
       return folhaId;
