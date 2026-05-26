@@ -1820,8 +1820,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                             child: TextFormField(
                                               controller: _rppsValCtrl,
                                               decoration: InputDecoration(
-                                                labelText: "Valor RPPS (R$)",
-                                                prefixText: "R$ ",
+                                                labelText: r"Valor RPPS (R$)",
+                                                prefixText: r"R$ ",
                                                 labelStyle: TextStyle(color: _corTexto),
                                                 border: const OutlineInputBorder(),
                                               ),
